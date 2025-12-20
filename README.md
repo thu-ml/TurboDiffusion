@@ -78,17 +78,11 @@ To enable SageSLA, a fast SLA forward pass based on SageAttention, install [Spar
 pip install git+https://github.com/thu-ml/SpargeAttn.git --no-build-isolation
 ```
 
-For rCM/SLA training, additionally run:
-
-```bash
-pip install megatron-core hydra-core wandb webdataset
-pip install --no-build-isolation transformer_engine[pytorch]
-```
 
 ## Inference
-For GPUs with more than 40GB of GPU memory, **e.g., H100, we recommend using the unquantized checkpoint (without `-quant`) and removing `--quant_linear` from the command.**
+For GPUs with more than 40GB of GPU memory, **e.g., H100, please use the unquantized checkpoints (without `-quant`) and remove `--quant_linear` from the command. For RTX 5090, RTX 4090, or similar GPUs, please use the quantized checkpoints (with `-quant`) and add `--quant_linear` in the command.)**
 
-1.  Download the Wan2.1 VAE (**applicable for both Wan2.1 and Wan2.2**) and umT5 text encoder checkpoints from the official [Wan2.1](https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B) repository on Huggingface:
+1.  Download the VAE (**applicable for both Wan2.1 and Wan2.2**) and umT5 text encoder checkpoints:
 
     ```bash
     mkdir checkpoints
@@ -97,25 +91,29 @@ For GPUs with more than 40GB of GPU memory, **e.g., H100, we recommend using the
     wget https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth
     ```
 
-2.  Download our finetuned checkpoints:
-    ```bash
-    wget https://huggingface.co/TurboDiffusion/TurboWan2.1-T2V-1.3B-480P/resolve/main/TurboWan2.1-T2V-1.3B-480P.pth
-    ```
-    
-    For RTX 5090, RTX 4090, or similar GPUs, please use the quantized checkpoint:
+2. Download our quantized model checkpoints (For RTX 5090 or similar GPUs):
 
     ```bash
+    # For Wan2.1-T2V-1.3B
     wget https://huggingface.co/TurboDiffusion/TurboWan2.1-T2V-1.3B-480P/resolve/main/TurboWan2.1-T2V-1.3B-480P-quant.pth
-    ```
-    
 
-    For the Wan2.2-I2V model, download both the high-noise and low-noise checkpoints:
+    # For Wan2.2-I2V-14B
+    wget https://huggingface.co/TurboDiffusion/TurboWan2.2-I2V-A14B-720P/resolve/main/TurboWan2.2-I2V-A14B-high-720P-quant.pth
+    wget https://huggingface.co/TurboDiffusion/TurboWan2.2-I2V-A14B-720P/resolve/main/TurboWan2.2-I2V-A14B-low-720P-quant.pth
+    ```
+
+    **Or** download our unquantized model checkpoints (For H100 or similar GPUs):
     ```bash
+    # For Wan2.1-T2V-1.3B
+    wget https://huggingface.co/TurboDiffusion/TurboWan2.1-T2V-1.3B-480P/resolve/main/TurboWan2.1-T2V-1.3B-480P.pth
+
+    # For Wan2.2-I2V-14B
     wget https://huggingface.co/TurboDiffusion/TurboWan2.2-I2V-A14B-720P/resolve/main/TurboWan2.2-I2V-A14B-high-720P.pth
     wget https://huggingface.co/TurboDiffusion/TurboWan2.2-I2V-A14B-720P/resolve/main/TurboWan2.2-I2V-A14B-low-720P.pth
     ```
+    
 
-3.  Use the inference script for the **T2V** model:
+3.  Use the inference script for the **T2V** models:
     ```bash
     export PYTHONPATH=turbodiffusion
     
@@ -503,6 +501,14 @@ We evaluate video generation on **a single RTX 5090 GPU**. The E2E Time refers t
 ## Training
 
 In this repo, we provide training code based on Wan2.1 and its synthetic data. The training builds on the rCM codebase (https://github.com/NVlabs/rcm), with infrastructure support including FSDP2, Ulysses CP, and selective activation checkpointing (SAC). For rCM training instructions, please refer to the original rCM repository; SLA training guidance is provided here.
+
+#### Additional Installation
+For rCM/SLA training, additionally run:
+
+```bash
+pip install megatron-core hydra-core wandb webdataset
+pip install --no-build-isolation transformer_engine[pytorch]
+```
 
 #### Checkpoints Downloading
 Download the Wan2.1 pretrained checkpoints in `.pth` format and VAE/text encoder to `assets/checkpoints`:
