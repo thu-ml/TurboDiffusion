@@ -248,7 +248,27 @@ print('✅ All module imports working')
 echo ""
 echo "Installing SpargeAttn..."
 
-pip install git+https://github.com/thu-ml/SpargeAttn.git --no-build-isolation
+# Get GPU compute capability
+GPU_ARCH=$(python -c "import torch; cc = torch.cuda.get_device_capability(); print(f'{cc[0]}.{cc[1]}')" 2>/dev/null || echo "8.0")
+echo "   Detected GPU compute capability: $GPU_ARCH"
+
+# Clone, patch for Blackwell (sm_120) if needed, and install
+SPARGE_TMP="/tmp/SpargeAttn_build_$$"
+rm -rf "$SPARGE_TMP"
+git clone --depth 1 https://github.com/thu-ml/SpargeAttn.git "$SPARGE_TMP"
+
+# Add sm_120 (Blackwell) support if not already present
+if grep -q '"12.0"' "$SPARGE_TMP/setup.py"; then
+    echo "   SpargeAttn already supports sm_120"
+else
+    echo "   Patching SpargeAttn for Blackwell (sm_120) support..."
+    sed -i 's/SUPPORTED_ARCHS = {"8.0", "8.6", "8.7", "8.9", "9.0"}/SUPPORTED_ARCHS = {"8.0", "8.6", "8.7", "8.9", "9.0", "12.0"}/' "$SPARGE_TMP/setup.py"
+fi
+
+cd "$SPARGE_TMP"
+TORCH_CUDA_ARCH_LIST="$GPU_ARCH" pip install -e . --no-build-isolation
+cd "$SCRIPT_DIR"
+rm -rf "$SPARGE_TMP"
 
 # =============================================================================
 # Verify Installation
