@@ -30,8 +30,10 @@ from typing import Any, TypeVar
 import numpy as np
 import termcolor
 import torch
-from torch.distributed._functional_collectives import AsyncCollectiveTensor
-from torch.distributed._tensor.api import DTensor
+
+if torch.distributed.is_available():
+    from torch.distributed._functional_collectives import AsyncCollectiveTensor
+    from torch.distributed._tensor.api import DTensor
 
 from imaginaire.utils import distributed, log
 
