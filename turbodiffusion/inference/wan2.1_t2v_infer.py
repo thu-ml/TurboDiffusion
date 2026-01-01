@@ -224,7 +224,7 @@ if __name__ == "__main__":
     # --- CREDIT PRINT ---
     log.info("----------------------------------------------------------------")
     log.info("🚀 TurboDiffusion Optimized Inference")
-    log.info("   Co-developed by [Your Name/Handle] & Google Gemini")
+    log.info("   Co-developed by Waverly Edwards & Google Gemini")
     log.info("----------------------------------------------------------------")
 
     check_hardware_compatibility()
