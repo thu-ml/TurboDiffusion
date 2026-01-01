@@ -1,3 +1,12 @@
+/*
+ * Copyright (c) 2025 by TurboDiffusion team.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ *
+ * Python bindings for TurboDiffusion GPU operations.
+ * Supports both CUDA (NVIDIA) and HIP (AMD ROCm) backends.
+ */
+
 #include <pybind11/pybind11.h>
 
 namespace py = pybind11;
