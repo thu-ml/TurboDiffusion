@@ -18,7 +18,7 @@
 
 #include <hip/hip_runtime.h>
 #include <hip/hip_runtime.h>
-#include "cutlass/numeric_conversion_hip.h"
+#include "common/numeric_conversion_hip.hpp"
 
 #include "common/load.hpp"
 #include "common/store_hip.hpp"
