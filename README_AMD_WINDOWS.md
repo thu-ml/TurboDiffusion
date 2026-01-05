@@ -6,7 +6,7 @@ This guide explains how to build and run TurboDiffusion on Windows with AMD GPUs
 
 ## Supported Hardware
 
-TurboDiffusion on Windows has been tested with RDNA3/RDNA3.5 GPUs (gfx1100, gfx1101, gfx1102, gfx1103, gfx1151).
+TurboDiffusion on Windows has been tested with RDNA3/RDNA3.5 GPUs (gfx1100, gfx1101, gfx1102, gfx1151).
 
 ## Prerequisites
 
@@ -53,26 +53,8 @@ rocm-sdk init
 
 #### Install Triton with AMD Windows Support
 
-Install triton-windows and apply the AMD Windows support patches:
-
 ```powershell
 pip install triton-windows
-```
-
-**Temporary Fix:** Until [PR #179](https://github.com/woct0rdho/triton-windows/pull/179) is merged, you need to manually copy the patched files into your venv:
-
-1. Clone the PR branch:
-```powershell
-git clone --branch jam/windows_amd https://github.com/woct0rdho/triton-windows.git triton-windows-patch
-```
-
-2. Copy the patched files to your venv:
-```powershell
-$TRITON_AMD = ".\venv\Lib\site-packages\triton\backends\amd"
-Copy-Item "triton-windows-patch\third_party\amd\backend\driver.py" "$TRITON_AMD\driver.py" -Force
-Copy-Item "triton-windows-patch\third_party\amd\backend\driver.c" "$TRITON_AMD\driver.c" -Force
-Copy-Item "triton-windows-patch\third_party\amd\backend\compiler.py" "$TRITON_AMD\compiler.py" -Force
-Copy-Item "triton-windows-patch\python\triton\runtime\build.py" ".\venv\Lib\site-packages\triton\runtime\build.py" -Force
 ```
 
 ### 2. Set Environment Variables
@@ -105,25 +87,20 @@ $env:TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL = "1"
 $env:PYTHONPATH = "turbodiffusion"
 ```
 
-### 3. Install Dependencies
-
-```powershell
-pip install -r requirements.txt
-```
-
-### 4. Build and Install TurboDiffusion
+### 3. Build and Install TurboDiffusion
 
 ```powershell
 cd <path_to_turbodiffusion>
 pip install --no-build-isolation -e .
 ```
 
-### 5. Install SpargeAttn (Optional, for sparse attention)
+### 4. Install SpargeAttn (Optional, for sparse attention)
 
-If you want to use sparse attention with TurboDiffusion:
+If you want to use sparse attention with TurboDiffusion, clone the AMD Windows fork:
 
 ```powershell
-cd <path_to_spargeattn>
+git clone --branch jam/amd_windows https://github.com/jammm/SpargeAttn.git
+cd SpargeAttn
 pip install --no-build-isolation -v .
 ```
 
@@ -187,7 +164,7 @@ cmd /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Bu
 
 ### "PermissionError" when compiling Triton kernels
 
-This is a known Windows issue with temp file handling. Make sure you've applied the AMD Windows support patches from [PR #179](https://github.com/woct0rdho/triton-windows/pull/179) as described in the installation steps above.
+This is a known Windows issue with temp file handling. Make sure you're using the latest `triton-windows` package (`pip install --upgrade triton-windows`).
 
 ### "flash_attn is not installed" warning
 
