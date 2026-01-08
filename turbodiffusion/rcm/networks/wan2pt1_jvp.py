@@ -827,12 +827,6 @@ class WanModel_JVP(JVP):
                 Denoised video tensor with shape [B, C_out, T, H / 8, W / 8]
         """
 
-        assert timesteps_B_T.shape[1] == 1
-        t_B = timesteps_B_T[:, 0]
-        del kwargs
-        if self.model_type == "i2v" or self.model_type == "flf2v":
-            assert frame_cond_crossattn_emb_B_L_D is not None and y_B_C_T_H_W is not None
-
         cp_group = getattr(self, "_cp_group", None)
         cp_enabled = (cp_group is not None) and (cp_group.size() > 1)
         if cp_enabled:
@@ -843,6 +837,12 @@ class WanModel_JVP(JVP):
                 frame_cond_crossattn_emb_B_L_D = broadcast(frame_cond_crossattn_emb_B_L_D, cp_group)
             if y_B_C_T_H_W is not None:
                 y_B_C_T_H_W = broadcast(y_B_C_T_H_W, cp_group)
+
+        assert timesteps_B_T.shape[1] == 1
+        t_B = timesteps_B_T[:, 0]
+        del kwargs
+        if self.model_type == "i2v" or self.model_type == "flf2v":
+            assert frame_cond_crossattn_emb_B_L_D is not None and y_B_C_T_H_W is not None
 
         if y_B_C_T_H_W is not None:
             x_B_C_T_H_W = torch.cat([x_B_C_T_H_W, y_B_C_T_H_W], dim=1)
@@ -937,13 +937,6 @@ class WanModel_JVP(JVP):
         x_B_C_T_H_W, t_x_B_C_T_H_W = x_B_C_T_H_W_withT
         timesteps_B_T, t_timesteps_B_T = timesteps_B_T_withT
 
-        assert timesteps_B_T.shape[1] == 1 and t_timesteps_B_T.shape[1] == 1
-        t_B = timesteps_B_T[:, 0]
-        t_t_B = t_timesteps_B_T[:, 0]
-        del kwargs
-        if self.model_type == "i2v" or self.model_type == "flf2v":
-            assert frame_cond_crossattn_emb_B_L_D is not None and y_B_C_T_H_W is not None
-
         cp_group = getattr(self, "_cp_group", None)
         cp_enabled = (cp_group is not None) and (cp_group.size() > 1)
         if cp_enabled:
@@ -956,6 +949,13 @@ class WanModel_JVP(JVP):
                 frame_cond_crossattn_emb_B_L_D = broadcast(frame_cond_crossattn_emb_B_L_D, cp_group)
             if y_B_C_T_H_W is not None:
                 y_B_C_T_H_W = broadcast(y_B_C_T_H_W, cp_group)
+
+        assert timesteps_B_T.shape[1] == 1 and t_timesteps_B_T.shape[1] == 1
+        t_B = timesteps_B_T[:, 0]
+        t_t_B = t_timesteps_B_T[:, 0]
+        del kwargs
+        if self.model_type == "i2v" or self.model_type == "flf2v":
+            assert frame_cond_crossattn_emb_B_L_D is not None and y_B_C_T_H_W is not None
 
         if y_B_C_T_H_W is not None:
             x_B_C_T_H_W = torch.cat([x_B_C_T_H_W, y_B_C_T_H_W], dim=1)
