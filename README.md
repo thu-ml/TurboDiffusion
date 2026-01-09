@@ -578,7 +578,7 @@ The parameter updates from SLA training can be merged into rCM checkpoints using
 
 ## ComfyUI Integration
 
-We thank the community effort [Comfyui_turbodiffusion](https://github.com/anveshane/Comfyui_turbodiffusion) for integrating TurboDiffusion into ComfyUI.
+We thank the community effort [Comfyui_turbodiffusion](https://github.com/anveshane/Comfyui_turbodiffusion), [Comfyui-TurboDiffusion-T2V](https://github.com/trandangtrungduc/Comfyui-TurboDiffusion-T2V) for integrating TurboDiffusion into ComfyUI.
 
 ## Roadmap
 
