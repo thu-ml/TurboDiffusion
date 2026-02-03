@@ -124,7 +124,7 @@ class ImageioVideoHandler(BaseFileHandler):
         file: IO[bytes],
         format: str = "mp4",  # pylint: disable=redefined-builtin
         fps: int = 17,
-        quality: int = 7,
+        quality: int = 5,
         ffmpeg_params=None,
         **kwargs,
     ):
