@@ -121,6 +121,9 @@ class T2VDistillConfig_rCM:
     text_encoder_class: str = "umT5"
     text_encoder_path: str = ""
 
+    backward_timesteps: list = [1.5, 1.4, 1.0]  # TrigFlow time
+    dmd_fix_timesteps: bool = False
+
 
 class T2VDistillModel_rCM(ImaginaireModel):
 
@@ -494,10 +497,15 @@ class T2VDistillModel_rCM(ImaginaireModel):
         x_B_C_T_H_W = torch.randn(x_B_C_T_H_W_size, device="cuda")
         x_B_C_T_H_W = self.sync(x_B_C_T_H_W)
         t_traj, x_traj = [G_time_B_1], [x_B_C_T_H_W]
-        for _ in range(n_steps - 1):
-            G_time_B_1 = torch.minimum(self.draw_training_time_D(x_B_C_T_H_W_size, condition), G_time_B_1)
-            G_time_B_1 = self.sync(G_time_B_1)
-            t_traj.append(G_time_B_1)
+        for i in range(n_steps - 1):
+            if not self.config.dmd_fix_timesteps:
+                G_time_B_1 = torch.minimum(self.draw_training_time_D(x_B_C_T_H_W_size, condition), G_time_B_1)
+                G_time_B_1 = self.sync(G_time_B_1)
+                t_traj.append(G_time_B_1)
+            else:
+                backward_t = self.config.backward_timesteps[i]
+                G_time_B_1 = backward_t * torch.ones(x_B_C_T_H_W_size[0], 1, device="cuda")
+                t_traj.append(G_time_B_1)
         t_traj.append(0 * G_time_B_1)
         for step, (t_cur_B_1, t_next_B_1) in enumerate(zip(t_traj[:-1], t_traj[1:])):
             context_fn = torch.enable_grad if with_grad and step == n_steps - 1 else torch.no_grad
@@ -734,7 +742,7 @@ class T2VDistillModel_rCM(ImaginaireModel):
         init_noise, condition = self.sync(init_noise, condition)
 
         if mid_t is None:
-            mid_t = [1.3, 1.0, 0.6][: num_steps - 1]
+            mid_t = self.config.backward_timesteps[: num_steps - 1]
 
         t_steps = torch.tensor(
             [math.atan(self.config.sigma_max)] + list(mid_t),
