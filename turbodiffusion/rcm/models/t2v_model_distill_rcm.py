@@ -123,6 +123,7 @@ class T2VDistillConfig_rCM:
 
     backward_timesteps: list = [1.5, 1.4, 1.0]  # TrigFlow time
     dmd_fix_timesteps: bool = False
+    scm_timeshift: bool = False
 
 
 class T2VDistillModel_rCM(ImaginaireModel):
@@ -362,6 +363,12 @@ class T2VDistillModel_rCM(ImaginaireModel):
 
     def draw_training_time_G(self, x0_size: int, condition: Any) -> torch.Tensor:
         batch_size = x0_size[0]
+        if self.config.scm_timeshift and self.config.timestep_shift > 0:
+            sigma_B = torch.rand(batch_size).to(device="cuda").double()
+            sigma_B = self.config.timestep_shift * sigma_B / (1 + (self.config.timestep_shift - 1) * sigma_B)
+            sigma_B_1 = rearrange(sigma_B, "b -> b 1")
+            time_B_1 = torch.arctan(sigma_B_1 / (1 - sigma_B_1))
+            return time_B_1
         sigma_B = self.p_G(batch_size).to(device="cuda")
         sigma_B_1 = rearrange(sigma_B, "b -> b 1")  # add a dimension for T, all frames share the same sigma
         is_video_batch = condition.data_type == DataType.VIDEO

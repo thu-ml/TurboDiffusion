@@ -113,18 +113,10 @@ WAN2PT1_1PT3B_RES480P_T2V: LazyDict = LazyDict(
                 ),
                 tokenizer=dict(vae_pth="assets/checkpoints/Wan2.1_VAE.pth"),
                 text_encoder_path="assets/checkpoints/models_t5_umt5-xxl-enc-bf16.pth",
-                teacher_ckpt="assets/checkpoints/Wan2.1-T2V-1.3B.dcp/model",
+                teacher_ckpt="assets/checkpoints/Wan2.1-T2V-1.3B.dcp",
                 neg_embed_path="assets/checkpoints/umT5_wan_negative_emb.pt",
                 teacher_guidance=5.0,
                 tangent_warmup=1000,
-                p_G=dict(
-                    p_mean=-0.8,
-                    p_std=1.6,
-                ),
-                p_D=dict(
-                    p_mean=0.0,
-                    p_std=1.6,
-                ),
                 precision="bfloat16",
                 net=dict(
                     sac_config=dict(
@@ -185,7 +177,7 @@ WAN2PT1_14B_RES480P_T2V: LazyDict = LazyDict(
         ),
         model=dict(
             config=dict(
-                loss_scale=1000,
+                loss_scale=100,
                 state_t=21,
                 fsdp_shard_size=32,
                 student_update_freq=10,
@@ -195,7 +187,9 @@ WAN2PT1_14B_RES480P_T2V: LazyDict = LazyDict(
                     betas=(0.0, 0.999),
                 ),
                 tangent_warmup=0,
-                teacher_ckpt="assets/checkpoints/Wan2.1-T2V-14B.dcp/model",
+                scm_timeshift=True,
+                dmd_fix_timesteps=True,
+                teacher_ckpt="assets/checkpoints/Wan2.1-T2V-14B.dcp",
                 net=dict(
                     sac_config=dict(
                         mode="mm_only",
