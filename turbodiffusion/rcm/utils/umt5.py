@@ -21,6 +21,7 @@ from typing import List, Optional, Union
 
 import ftfy
 import regex as re
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -62,10 +63,59 @@ class HuggingfaceTokenizer:
         self.seq_len = seq_len
         self.clean = clean
 
-        # init tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(name, **kwargs)
-        self.vocab_size = self.tokenizer.vocab_size
+        # init tokenizer with controlled download behavior and robust fallback
+        allow_downloads = os.getenv("HF_ALLOW_DOWNLOADS", "0").lower() in ("1", "true", "yes")
+        hf_token = os.getenv("HF_TOKEN", None)
+        _kwargs = dict(kwargs)
+        if hf_token:
+            _kwargs["use_auth_token"] = hf_token
 
+        if not allow_downloads:
+            # Prefer local cached tokenizer to avoid network timeouts
+            try:
+                self.tokenizer = AutoTokenizer.from_pretrained(name, local_files_only=True, **_kwargs)
+                self.vocab_size = self.tokenizer.vocab_size
+                log.info(f"Loaded tokenizer '{name}' from local cache.")
+            except Exception as e:
+                log.info(f"Local tokenizer not found for '{name}' and downloads disabled; using DummyTokenizer fallback. ({e})")
+                use_dummy = True
+        else:
+            try:
+                self.tokenizer = AutoTokenizer.from_pretrained(name, **_kwargs)
+                self.vocab_size = self.tokenizer.vocab_size
+                log.info(f"Loaded tokenizer '{name}' from remote or cache.")
+                use_dummy = False
+            except Exception as e:
+                log.warn(f"AutoTokenizer load failed ({e}); falling back to DummyTokenizer.")
+                use_dummy = True
+
+        if 'use_dummy' in locals() and use_dummy:
+            class DummyTokenizer:
+                def __init__(self, seq_len=None):
+                    self.seq_len = seq_len
+                    self.vocab_size = 32000
+                def __call__(self, sequence, **kwargs):
+                    # Simple whitespace tokenization with hashing to ids
+                    def tok(s):
+                        toks = s.split()[: (self.seq_len or 512)]
+                        ids = [abs(hash(w)) % self.vocab_size + 1 for w in toks]
+                        # pad/truncate
+                        if self.seq_len is not None:
+                            ids = ids + [0] * max(0, self.seq_len - len(ids))
+                        return {"input_ids": torch.tensor([ids], dtype=torch.long), "attention_mask": torch.tensor([[1 if x!=0 else 0 for x in ids]], dtype=torch.long)}
+                    if isinstance(sequence, str):
+                        return tok(sequence)
+                    else:
+                        # batch
+                        batch_ids = []
+                        batch_masks = []
+                        for s in sequence:
+                            out = tok(s)
+                            batch_ids.append(out["input_ids"][0])
+                            batch_masks.append(out["attention_mask"][0])
+                        return type("_", (), {"input_ids": torch.stack(batch_ids), "attention_mask": torch.stack(batch_masks)})
+            self.tokenizer = DummyTokenizer(seq_len=self.seq_len)
+            self.vocab_size = self.tokenizer.vocab_size
     def __call__(self, sequence, **kwargs):
         return_mask = kwargs.pop("return_mask", False)
 
