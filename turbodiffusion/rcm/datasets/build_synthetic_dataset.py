@@ -4,7 +4,6 @@ import math
 import tarfile
 import time
 import torch
-import torch.distributed as dist
 import argparse
 from tqdm import tqdm
 from imaginaire.utils import distributed
@@ -13,7 +12,6 @@ from collections import defaultdict
 from einops import repeat
 
 from imaginaire.lazy_config import LazyCall as L, LazyDict, instantiate
-from imaginaire.utils import log
 
 from rcm.datasets.utils import VIDEO_RES_SIZE_INFO
 from rcm.utils.umt5 import get_umt5_embedding
