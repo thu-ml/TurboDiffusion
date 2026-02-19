@@ -653,11 +653,8 @@ class T2VDistillModel_rCM(ImaginaireModel):
         self, x0_B_C_T_H_W: torch.Tensor, condition: TextCondition, uncondition: TextCondition, iteration: int
     ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
         log.debug(f"Critic update {iteration}")
-        time_B_T = self.draw_training_time_G(x0_B_C_T_H_W.size(), condition)
         epsilon_B_C_T_H_W = torch.randn(x0_B_C_T_H_W.size(), device="cuda")
-        x0_B_C_T_H_W, time_B_T, epsilon_B_C_T_H_W, condition, uncondition = self.sync(
-            x0_B_C_T_H_W, time_B_T, epsilon_B_C_T_H_W, condition, uncondition
-        )
+        x0_B_C_T_H_W, epsilon_B_C_T_H_W, condition, uncondition = self.sync(x0_B_C_T_H_W, epsilon_B_C_T_H_W, condition, uncondition)
         num_simulation_steps_fake = self.get_effective_iteration_fake(iteration) % self.config.max_simulation_steps_fake + 1
         G_x0_theta_B_C_T_H_W, _ = self.backward_simulation(condition, x0_B_C_T_H_W.size(), num_simulation_steps_fake, with_grad=False)
 
