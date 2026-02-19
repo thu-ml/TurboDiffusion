@@ -524,7 +524,7 @@ class T2VDistillModel_rCM(ImaginaireModel):
             x_traj.append(x_B_C_T_H_W.detach())
         return x_B_C_T_H_W, (t_traj, x_traj)
 
-    def _make_student_ctx(self, x0_B_C_T_H_W, condition, uncondition, iteration):
+    def _make_training_ctx(self, x0_B_C_T_H_W, condition, uncondition, iteration):
         x0_B_C_T_H_W, condition, uncondition = self.sync(x0_B_C_T_H_W, condition, uncondition)
         return (x0_B_C_T_H_W, condition, uncondition)
 
@@ -649,12 +649,9 @@ class T2VDistillModel_rCM(ImaginaireModel):
         }
         return output_batch, kendall_loss
 
-    def training_step_critic(
-        self, x0_B_C_T_H_W: torch.Tensor, condition: TextCondition, uncondition: TextCondition, iteration: int
-    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+    def training_step_critic(self, ctx, iteration) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
         log.debug(f"Critic update {iteration}")
-        epsilon_B_C_T_H_W = torch.randn(x0_B_C_T_H_W.size(), device="cuda")
-        x0_B_C_T_H_W, epsilon_B_C_T_H_W, condition, uncondition = self.sync(x0_B_C_T_H_W, epsilon_B_C_T_H_W, condition, uncondition)
+        x0_B_C_T_H_W, condition, uncondition = ctx
         num_simulation_steps_fake = self.get_effective_iteration_fake(iteration) % self.config.max_simulation_steps_fake + 1
         G_x0_theta_B_C_T_H_W, _ = self.backward_simulation(condition, x0_B_C_T_H_W.size(), num_simulation_steps_fake, with_grad=False)
 
@@ -677,12 +674,12 @@ class T2VDistillModel_rCM(ImaginaireModel):
     def training_step_closures(self, data_batch, iteration: int):
         _, x0_B_C_T_H_W, condition, uncondition = self.get_data_and_condition(data_batch)
 
+        ctx = self._make_training_ctx(x0_B_C_T_H_W, condition, uncondition, iteration)
+
         if self.is_student_phase(iteration):
             self.net.train().requires_grad_(True)
             if self.net_fake_score:
                 self.net_fake_score.eval().requires_grad_(False)
-
-            ctx = self._make_student_ctx(x0_B_C_T_H_W, condition, uncondition, iteration)
 
             if self.config.loss_scale > 0:
                 yield "scm", lambda: self._student_scm_step(ctx, iteration)
@@ -694,7 +691,7 @@ class T2VDistillModel_rCM(ImaginaireModel):
             self.net.eval().requires_grad_(False)
             self.net_fake_score.train().requires_grad_(True)
 
-            yield "critic", lambda: self.training_step_critic(x0_B_C_T_H_W, condition, uncondition, iteration)
+            yield "critic", lambda: self.training_step_critic(ctx, iteration)
 
     @torch.no_grad()
     def forward(self, xt, t, condition: TextCondition):
