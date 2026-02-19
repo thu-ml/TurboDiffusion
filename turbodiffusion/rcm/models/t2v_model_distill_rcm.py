@@ -175,6 +175,9 @@ class T2VDistillModel_rCM(ImaginaireModel):
         else:
             self.data_parallel_size = 1
 
+        if self.config.loss_scale == 0:
+            assert self.config.tangent_warmup == 0
+
     def build_net(self, net_dict: LazyDict):
         init_device = "meta"
         with misc.timer("Creating PyTorch model"):
@@ -684,7 +687,7 @@ class T2VDistillModel_rCM(ImaginaireModel):
             if self.config.loss_scale > 0:
                 yield "scm", lambda: self._student_scm_step(ctx, iteration)
 
-            if self.net_fake_score and iteration > self.config.tangent_warmup and self.config.loss_scale_dmd > 0:
+            if self.net_fake_score and iteration >= self.config.tangent_warmup and self.config.loss_scale_dmd > 0:
                 yield "dmd", lambda: self._student_dmd_step(ctx, iteration)
 
         else:
