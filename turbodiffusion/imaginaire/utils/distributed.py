@@ -156,6 +156,12 @@ def barrier() -> None:
         dist.barrier()
 
 
+def destroy_process_group() -> None:
+    """Destroy the distributed process group."""
+    if dist.is_available() and dist.is_initialized():
+        dist.destroy_process_group()
+
+
 def rank0_first(func: Callable) -> Callable:
     """run the function on rank 0 first, then on other ranks."""
 
