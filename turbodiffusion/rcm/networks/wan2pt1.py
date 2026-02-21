@@ -29,14 +29,17 @@ except ImportError:
     flash_apply_rotary_emb = None
     print("flash_attn is not installed.")
 
-from torch.distributed import ProcessGroup, get_process_group_ranks
-from torch.distributed._composable.fsdp import fully_shard
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper as ptd_checkpoint_wrapper
+from torch.distributed import ProcessGroup
+
+if torch.distributed.is_available():
+    from torch.distributed import ProcessGroup, get_process_group_ranks
+    from torch.distributed._composable.fsdp import fully_shard
+    from rcm.utils.context_parallel import split_inputs_cp, cat_outputs_cp, cat_outputs_cp_with_grad, broadcast
 
 from imaginaire.utils import log
 from rcm.utils.a2a_cp import MinimalA2AAttnOp
 from rcm.utils.selective_activation_checkpoint import CheckpointMode, SACConfig
-from rcm.utils.context_parallel import split_inputs_cp, cat_outputs_cp, cat_outputs_cp_with_grad, broadcast
 
 T5_CONTEXT_TOKEN_NUMBER = 512
 FIRST_LAST_FRAME_CONTEXT_TOKEN_NUMBER = 257 * 2
@@ -543,7 +546,7 @@ class WanModel(nn.Module):
                 Epsilon value for normalization layers
         """
 
-        super().__init__()
+        super().__init__()  
 
         assert model_type in ["t2v", "i2v", "flf2v"]
         self.model_type = model_type
