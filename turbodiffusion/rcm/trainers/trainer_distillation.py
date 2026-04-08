@@ -256,12 +256,11 @@ class ImaginaireTrainer_Distill:
         else:
             model = model_ddp
         with self.training_timer(f"forward_init"):
-            closures = list(model_ddp.training_step_closures(data_batch, iteration))
+            closures_iter = iter(model_ddp.training_step_closures(data_batch, iteration))
         is_last_accum = grad_accum_iter == self.config.trainer.grad_accum_iter - 1
         output_batch = {}
         loss_total = 0.0
-        for i, (name, closure) in enumerate(closures):
-            is_last_closure = i == len(closures) - 1
+        for name, closure, is_last_closure in closures_iter:
             sync_this_backward = is_last_accum and is_last_closure  # only sync once
 
             with distributed.ddp_sync_grad(model_ddp, sync_this_backward):
@@ -275,11 +274,11 @@ class ImaginaireTrainer_Distill:
 
                 self.callbacks.on_before_backward(model_ddp, loss_i, iteration=iteration)
                 with self.training_timer(f"backward:{name}"):
-                    grad_scaler.scale(loss_i / self.config.trainer.grad_accum_iter).backward()
+                    grad_scaler.scale(loss_i.sum() / self.config.trainer.grad_accum_iter).backward()
                     model.on_after_backward()
                 self.callbacks.on_after_backward(model_ddp, iteration=iteration)
 
-            loss_total = loss_total + float(loss_i.detach())
+            loss_total = loss_total + float(loss_i.detach().sum())
 
         loss = torch.tensor(loss_total, device="cuda")
         grad_accum_iter += 1

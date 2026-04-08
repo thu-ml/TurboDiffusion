@@ -53,12 +53,10 @@ from rcm.utils.jvp_helper import TensorWithT
 from rcm.utils.misc import count_params
 from rcm.utils.torch_future import clip_grad_norm_
 from rcm.utils.denoiser_scaling import RectifiedFlow_TrigFlowWrapper
-from rcm.utils.timestep_utils import LogNormal, rf_to_trig_time
+from rcm.utils.timestep_utils import LogNormal, rf_to_trig_time, shift_rf_time
 from rcm.configs.defaults.ema import EMAConfig
 from rcm.samplers.euler import FlowEulerSampler
 from rcm.samplers.unipc import FlowUniPCMultistepSampler
-
-torch._dynamo.config.suppress_errors = True
 
 IS_PREPROCESSED_KEY = "is_preprocessed"
 IS_PROCESSED_KEY = "is_processed"
@@ -114,6 +112,12 @@ class T2VDistillConfig_rCM:
     backward_timesteps: list = [1.5, 1.4, 1.0]  # TrigFlow time
     dmd_fix_timesteps: bool = False
 
+    # dcm: discrete-time CM; scm: continuous-time CM
+    cm_type: Literal["scm", "dcm"] = "scm"
+    dcm_total_steps: int = 48
+    dcm_skipping_interval_steps: int = 1
+    dcm_timestep_shift: float = 5.0
+
 
 class T2VDistillModel_rCM(ImaginaireModel):
 
@@ -163,6 +167,8 @@ class T2VDistillModel_rCM(ImaginaireModel):
         if self.config.loss_scale == 0:
             assert self.config.tangent_warmup == 0
 
+        torch._dynamo.config.suppress_errors = True
+
     def build_net(self, net_dict: LazyDict):
         init_device = "meta"
         with misc.timer("Creating PyTorch model"):
@@ -185,7 +191,7 @@ class T2VDistillModel_rCM(ImaginaireModel):
                     assert isinstance(param, DTensor), f"param should be DTensor, {name} got {type(param)}"
         return net
 
-    def load_ckpt_to_net(self, net, ckpt_path, prefix="net"):
+    def load_ckpt_to_net(self, net, ckpt_path):
         storage_reader = FileSystemReader(ckpt_path)
         _state_dict = get_model_state_dict(net)
 
@@ -193,6 +199,8 @@ class T2VDistillModel_rCM(ImaginaireModel):
         checkpoint_keys = metadata.state_dict_metadata.keys()
 
         model_keys = set(_state_dict.keys())
+
+        prefix = "net_ema" if any(k.startswith("net_ema.") for k in checkpoint_keys) else "net"
 
         # Add the prefix to the model keys for comparison
         prefixed_model_keys = {f"{prefix}.{k}" for k in model_keys}
@@ -580,6 +588,57 @@ class T2VDistillModel_rCM(ImaginaireModel):
         }
         return output_batch, kendall_loss
 
+    def _student_dcm_step(self, ctx, iteration):
+        log.debug(f"Student update {iteration} (dCM)")
+        x0_B_C_T_H_W, condition, uncondition = ctx
+        B = x0_B_C_T_H_W.shape[0]
+        epsilon_B_C_T_H_W = torch.randn(x0_B_C_T_H_W.size(), device="cuda")
+        epsilon_B_C_T_H_W = self.sync(epsilon_B_C_T_H_W)
+
+        du = 1.0 / self.config.dcm_total_steps
+        u_B_1 = torch.rand(B, 1, device="cuda") * (1.0 - self.config.dcm_skipping_interval_steps * du)
+        u_B_1 = self.sync(u_B_1)
+
+        trig_t_list = []
+        for k in range(self.config.dcm_skipping_interval_steps + 1):
+            s_k_B_1 = 1.0 - (u_B_1 + k * du)
+            rf_t_k_B_1 = shift_rf_time(s_k_B_1, self.config.dcm_timestep_shift)
+            trig_t_k_B_1 = rf_to_trig_time(rf_t_k_B_1)
+            trig_t_list.append(trig_t_k_B_1)
+
+        trig_t0_B_1, trig_tN_B_1 = trig_t_list[0], trig_t_list[-1]
+        trig_t0_B_1_1_1_1 = rearrange(trig_t0_B_1, "b 1 -> b 1 1 1 1")
+
+        xt_B_C_T_H_W = torch.cos(trig_t0_B_1_1_1_1) * x0_B_C_T_H_W + torch.sin(trig_t0_B_1_1_1_1) * epsilon_B_C_T_H_W
+
+        x0_pred_B_C_T_H_W = self.denoise(xt_B_C_T_H_W, trig_t0_B_1, condition, net_type="student").x0
+
+        with torch.no_grad():
+            xk_B_C_T_H_W = xt_B_C_T_H_W
+            for k in range(self.config.dcm_skipping_interval_steps):
+                trig_tk_B_1 = trig_t_list[k]
+                trig_tk1_B_1 = trig_t_list[k + 1]
+                dt_B_1 = trig_tk_B_1 - trig_tk1_B_1
+
+                F_teacher_B_C_T_H_W = self.denoise(xk_B_C_T_H_W, trig_tk_B_1, condition, net_type="teacher").F
+                if self.config.teacher_guidance > 1.0:
+                    F_uncond_B_C_T_H_W = self.denoise(xk_B_C_T_H_W, trig_tk_B_1, uncondition, net_type="teacher").F
+                    F_teacher_B_C_T_H_W = F_uncond_B_C_T_H_W + self.config.teacher_guidance * (F_teacher_B_C_T_H_W - F_uncond_B_C_T_H_W)
+
+                xk_B_C_T_H_W = xk_B_C_T_H_W - rearrange(dt_B_1, "b 1 -> b 1 1 1 1") * F_teacher_B_C_T_H_W
+
+            x0_target_B_C_T_H_W = self.denoise(xk_B_C_T_H_W, trig_tN_B_1, condition, net_type="student").x0
+
+        loss_cm = ((x0_pred_B_C_T_H_W - x0_target_B_C_T_H_W) ** 2).sum(dim=(1, 2, 3, 4))
+        kendall_loss = self.config.loss_scale * loss_cm
+        output_batch = {
+            "x0": x0_B_C_T_H_W.detach().cpu(),
+            "xt": xt_B_C_T_H_W.detach().cpu(),
+            "time": trig_t0_B_1.detach().cpu(),
+            "model_pred": DenoisePrediction(x0=x0_pred_B_C_T_H_W.detach().cpu()),
+        }
+        return output_batch, kendall_loss
+
     def _student_dmd_step(self, ctx, iteration):
         log.debug(f"Student update {iteration} (DMD)")
         x0_B_C_T_H_W, condition, uncondition = ctx
@@ -646,21 +705,20 @@ class T2VDistillModel_rCM(ImaginaireModel):
         ctx = self._make_training_ctx(x0_B_C_T_H_W, condition, uncondition, iteration)
 
         if self.is_student_phase(iteration):
-            self.net.train().requires_grad_(True)
-            if self.net_fake_score:
-                self.net_fake_score.eval().requires_grad_(False)
+            emit_cm = self.config.loss_scale > 0
+            emit_dmd = self.net_fake_score and iteration >= self.config.tangent_warmup and self.config.loss_scale_dmd > 0
 
-            if self.config.loss_scale > 0:
-                yield "scm", lambda: self._student_scm_step(ctx, iteration)
+            if emit_cm:
+                if self.config.cm_type == "scm":
+                    yield "scm", lambda: self._student_scm_step(ctx, iteration), not emit_dmd
+                else:
+                    yield "dcm", lambda: self._student_dcm_step(ctx, iteration), not emit_dmd
 
-            if self.net_fake_score and iteration >= self.config.tangent_warmup and self.config.loss_scale_dmd > 0:
-                yield "dmd", lambda: self._student_dmd_step(ctx, iteration)
+            if emit_dmd:
+                yield "dmd", lambda: self._student_dmd_step(ctx, iteration), True
 
         else:
-            self.net.eval().requires_grad_(False)
-            self.net_fake_score.train().requires_grad_(True)
-
-            yield "critic", lambda: self.training_step_critic(ctx, iteration)
+            yield "critic", lambda: self.training_step_critic(ctx, iteration), True
 
     @torch.no_grad()
     def forward(self, xt, t, condition: TextCondition):
