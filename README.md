@@ -53,7 +53,12 @@ Note: All checkpoints support generating videos at 480p or 720p. The "Best Resol
 
 ## TurboT2AV
 
-TurboT2AV is included under [`TurboT2AV/`](TurboT2AV/) for fast text-to-audio-video generation.
+[`TurboT2AV/`](TurboT2AV/) provides fast text-to-audio-video generation with a
+distilled LTX-2 audio-video model. It applies an RCM-style distillation strategy
+to joint audio-video generation, combining the diversity benefits of consistency
+models with the perceptual quality of score-model distillation. The released
+inference pipeline uses a 4-step student distilled from a 40-step teacher at the
+14B-video + 5B-audio scale.
 
 
 ## Installation
