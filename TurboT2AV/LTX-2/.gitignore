@@ -1,0 +1,44 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+checkpoints/
+*.egg-info
+
+# Virtual environments
+.venv
+.python-version
+
+# IDE settings
+.idea/
+.vscode/
+
+# Other files
+.DS_Store
+tmp
+
+# Model checkpoints
+*.ckpt
+*.pt
+*.safetensors
+*.sft
+
+# Media files
+*.gif
+*.heic
+*.heif
+*.jpg
+*.jpeg
+*.json
+*.m4a
+*.mov
+*.mp4
+*.png
+*.wav
+*.webp
+
+LTX-2/eval/outputs/*# pixi environments
+.pixi/*
+!.pixi/config.toml

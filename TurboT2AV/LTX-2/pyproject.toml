@@ -1,0 +1,67 @@
+[dependency-groups]
+dev = [
+    "pre-commit>=4.3.0",
+    "ruff>=0.14.3",
+    "pytest~=9.0",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+exclude = []
+
+[tool.ruff.lint]
+select = [
+    "E", # pycodestyle
+    "F", # pyflakes
+    "W", # pycodestyle (warnings)
+    "I", # isort
+    "N", # pep8-naming
+    "ANN", # flake8-annotations
+    "B", # flake8-bugbear
+    "A", # flake8-builtins
+    "COM", # flake8-commas
+    "C4", # flake8-comprehensions
+    "DTZ", # flake8-datetimez
+    "EXE", # flake8-executable
+    "PIE", # flake8-pie
+    "T20", # flake8-print
+    "PT", # flake8-pytest
+    "SIM", # flake8-simplify
+    "ARG", # flake8-unused-arguments
+    "PTH", # flake8--use-pathlib
+    "ERA", # flake8-eradicate
+    "RUF", # ruff specific rules
+    "PL", # pylint
+]
+ignore = [
+    "ANN002", # Missing type annotation for *args
+    "ANN003", # Missing type annotation for **kwargs
+    "ANN204", # Missing type annotation for special method
+    "COM812", # Missing trailing comma
+    "PTH123", # `open()` should be replaced by `Path.open()`
+    "PLR2004", # Magic value used in comparison, consider replacing with a constant variable
+    "N812", # Lowercase  imported as non-lowercase
+]
+
+[tool.ruff.lint.pylint]
+max-args = 10
+
+[tool.ruff.lint.isort]
+known-first-party = ["ltx_core", "ltx_pipelines", "ltx_distillation"]
+
+[tool.pixi.workspace]
+name = "LTX-2"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tool.pixi.dependencies]
+python = "3.11.*"
+pip = "*"
+
+[tool.pixi.environments]
+default = { solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+
+[tool.pixi.tasks]
+install-pytorch = "pip install torch==2.7.0+cu128 torchvision==0.22.0+cu128 torchaudio==2.7.0+cu128 --index-url https://download.pytorch.org/whl/cu128"
