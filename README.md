@@ -13,14 +13,12 @@ Paper: [TurboDiffusion: Accelerating Video Diffusion Models by 100-200 Times](ht
 
 The checkpoints and paper are not finalized, and will be updated later to improve quality.
 
-## TurboT2AV
-
-[`TurboT2AV/`](TurboT2AV/) provides fast text-to-audio-video generation with a
-distilled LTX-2 audio-video model. It applies an RCM-style distillation strategy
-to joint audio-video generation, combining the diversity benefits of consistency
-models with the perceptual quality of score-model distillation. The released
-inference pipeline uses a 4-step student distilled from a 40-step teacher at the
-14B-video + 5B-audio scale.
+**TurboT2AV**: [`TurboT2AV/`](TurboT2AV/) provides fast text-to-audio-video
+generation with a distilled LTX-2 audio-video model. It applies an RCM-style
+distillation strategy to joint audio-video generation, combining the diversity
+benefits of consistency models with the perceptual quality of score-model
+distillation. The released inference pipeline uses a 4-step student distilled
+from a 40-step teacher at the 14B-video + 5B-audio scale.
 
 <div align="center">
 <img src="assets/TurboDiffusion_speedup.png" width="99%"/>
