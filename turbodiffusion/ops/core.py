@@ -50,10 +50,29 @@ def int8_linear(
     x = x.reshape(-1, shape[-1])
     m = x.shape[0]
     n = w_q.shape[0]
-    y = torch.zeros(m, n, dtype=x.dtype, device=x.device)
+    # Allocate accumulator in a dtype accepted by the GEMM kernel (float16 or bfloat16)
+    # The CUDA kernel supports kHalf (float16) and kBFloat16 for the output C matrix.
+    out_dtype = torch.bfloat16 if x.dtype == torch.bfloat16 else torch.float16
+    y = torch.zeros(m, n, dtype=out_dtype, device=x.device)
 
     x_q, x_s = int8_quant(x)
-    gemm_cuda(x_q, x_s, w_q, w_s, y)
+
+    # Ensure scales are float32 as required by the gemm kernel
+    if x_s.dtype != torch.float32:
+        x_s = x_s.to(torch.float32)
+    if w_s.dtype != torch.float32:
+        w_s = w_s.to(torch.float32)
+
+    # Debug check - raise informative error if kernel doesn't accept these dtypes
+    try:
+        gemm_cuda(x_q, x_s, w_q, w_s, y)
+    except RuntimeError as e:
+        raise RuntimeError(
+            f"Unsupported output data type for int8 gemm. dtypes -> x_q:{x_q.dtype}, x_s:{x_s.dtype}, w_q:{w_q.dtype}, w_s:{w_s.dtype}, y:{y.dtype}. Inner: {e}"
+        )
+
+    # Cast back to input dtype to preserve model dtype expectations
+    y = y.to(x.dtype)
     return y.reshape(*shape[:-1], n)
 
 def flatten_if_batched(*tensors):
