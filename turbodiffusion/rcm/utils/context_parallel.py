@@ -16,8 +16,11 @@
 
 import torch
 from torch import Tensor
-from torch.distributed import ProcessGroup, all_gather, broadcast_object_list, get_process_group_ranks, get_world_size
-from torch.distributed.utils import _verify_param_shape_across_processes
+if torch.distributed.is_available():
+    from torch.distributed import ProcessGroup, all_gather, broadcast_object_list, get_process_group_ranks, get_world_size
+    from torch.distributed.utils import _verify_param_shape_across_processes
+else:
+    from torch.distributed import ProcessGroup
 
 from imaginaire.utils import distributed
 

@@ -28,11 +28,11 @@ from typing import TYPE_CHECKING, Any
 import pynvml
 import torch
 import torch.distributed as dist
-from torch.distributed import get_process_group_ranks
 
 from imaginaire.utils.device import Device
 
 if dist.is_available():
+    from torch.distributed import get_process_group_ranks
     from torch.distributed.distributed_c10d import _get_default_group
     from torch.distributed.utils import _sync_module_states, _verify_param_shape_across_processes
 

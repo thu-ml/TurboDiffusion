@@ -20,7 +20,7 @@ classifiers = [
 dependencies = [
   "torch>=2.7.0",
   "torchvision",
-  "triton>=3.3.0",
+  "triton-windows>=3.3.0",
   "flash-attn",
   "einops",
   "numpy",

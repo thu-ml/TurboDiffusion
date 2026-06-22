@@ -1,16 +1,6 @@
-.DS_Store
-.vscode
-__pycache__
-
-# build results
-build/
-dist/
-*.egg-info
-*.so
-
-# checkpoints
+﻿venv/
+__pycache__/
+.vscode/
 checkpoints/
-
-# outputs
-output*/
-*.mp4
+output/
+*.egg-info/

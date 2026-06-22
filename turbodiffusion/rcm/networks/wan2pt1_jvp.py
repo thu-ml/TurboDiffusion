@@ -21,9 +21,11 @@ import torch.amp as amp
 import torch.nn as nn
 from einops import rearrange, repeat
 from flash_attn.layers.rotary import apply_rotary_emb as flash_apply_rotary_emb
-from torch.distributed import ProcessGroup, get_process_group_ranks
-from torch.distributed._composable.fsdp import fully_shard
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper as ptd_checkpoint_wrapper
+
+if torch.distributed.is_available():
+    from torch.distributed import ProcessGroup, get_process_group_ranks
+    from torch.distributed._composable.fsdp import fully_shard
 
 from imaginaire.utils import log
 from rcm.utils.a2a_cp import MinimalA2AAttnOp
