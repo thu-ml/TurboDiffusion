@@ -1,3 +1,7 @@
 [submodule "turbodiffusion/ops/cutlass"]
 	path = turbodiffusion/ops/cutlass
 	url = https://github.com/NVIDIA/cutlass
+[submodule "TurboT2AV"]
+	path = TurboT2AV
+	url = https://github.com/liuyuxiang1021/turbo-t2av.git
+	branch = main
