@@ -1,0 +1,253 @@
+# =============================================================================
+# turbo-t2av Project .gitignore
+# =============================================================================
+
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# =============================================================================
+# Virtual Environments
+# =============================================================================
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# =============================================================================
+# IDE & Editor
+# =============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+.spyderproject
+.spyproject
+
+# =============================================================================
+# Model Checkpoints & Weights (Large Files)
+# =============================================================================
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.onnx
+*.model
+*.pk
+*.pkl
+checkpoints/
+weights/
+pretrained/
+models/*.safetensors
+models/*.pt
+models/*.pth
+
+# =============================================================================
+# Data Files (Large Files)
+# =============================================================================
+*.mdb
+
+# HDF5 and numpy
+*.h5
+*.hdf5
+*.npy
+*.npz
+
+# Parquet and other data formats
+*.parquet
+*.arrow
+*.feather
+
+# Large text datasets (uncomment if needed)
+# *.txt
+
+# Specific large data files in this project
+LTX-2/packages/*.txt
+LTX-2/packages/audiocap_*.txt
+LTX-2/packages/vidprom_*.txt
+LTX-2/packages/prompts.txt
+
+# General data directories
+data/
+datasets/
+dataset/
+
+# =============================================================================
+# Output & Results
+# =============================================================================
+outputs/
+output/
+results/
+save_results/
+generated/
+samples/
+
+# =============================================================================
+# Logs & Monitoring
+# =============================================================================
+logs/
+*.log
+runs/
+tensorboard/
+mlruns/
+lightning_logs/
+
+# =============================================================================
+# Media Files (Generated)
+# =============================================================================
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.gif
+*.png
+*.jpg
+*.jpeg
+*.wav
+
+# Keep README demo assets self-contained in packaged copies of the repository.
+!assets/*.mp4
+!assets/*.png
+*.mp3
+*.flac
+*.ogg
+
+# =============================================================================
+# Archives (Large Files)
+# =============================================================================
+*.tar
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.zip
+*.7z
+*.rar
+*.gz
+*.bz2
+
+# =============================================================================
+# OS Generated Files
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# =============================================================================
+# Cache & Temporary
+# =============================================================================
+.cache/
+*.cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+server_cache/
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*~
+
+# =============================================================================
+# Jupyter Notebooks
+# =============================================================================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+# =============================================================================
+# Testing & Coverage
+# =============================================================================
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+nosetests.xml
+coverage/
+
+# =============================================================================
+# Build & Distribution
+# =============================================================================
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+
+# =============================================================================
+# Secrets & Credentials
+# =============================================================================
+*.env.local
+.env.*.local
+secrets.yaml
+secrets.json
+credentials.json
+*.pem
+*.key
+
+# =============================================================================
+# Gradio & Web App
+# =============================================================================
+.gradio/
+app/.gradio/
+flagged/
+
+# =============================================================================
+# CUDA & Compiled Extensions
+# =============================================================================
+*.o
+*.a
+*.exe
+*.out
+*.pid
+
+# =============================================================================
+# Keep These (override ignores)
+# =============================================================================
+!.gitkeep
+!requirements*.txt
+!README*.md
+!LICENSE

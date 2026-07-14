@@ -1,0 +1,88 @@
+diff --git a/csrc/qattn/pybind.cpp b/csrc/qattn/pybind.cpp
+index d54667b..81f068b 100644
+--- a/csrc/qattn/pybind.cpp
++++ b/csrc/qattn/pybind.cpp
+@@ -21,0 +22 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
++#ifdef HAS_SM80
+@@ -23,0 +25 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
++#endif
+@@ -24,0 +27 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
++#ifdef HAS_SM89
+@@ -30,0 +34 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
++#endif
+@@ -36 +40 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+-}
+\ No newline at end of file
++}
+diff --git a/setup.py b/setup.py
+index 3e6b13b..2aebf90 100644
+--- a/setup.py
++++ b/setup.py
+@@ -18,0 +19 @@ from pathlib import Path
++import site
+@@ -27,0 +29,2 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
++HAS_SM80 = False
++HAS_SM89 = False
+@@ -50,0 +54,21 @@ def get_instantiations(src_dir: str):
++def get_nvidia_include_dirs() -> List[str]:
++    include_dirs = []
++    if CUDA_HOME is not None:
++        for cuda_include in [
++            Path(CUDA_HOME) / "include",
++            Path(CUDA_HOME) / "targets" / "x86_64-linux" / "include",
++        ]:
++            if cuda_include.is_dir():
++                include_dirs.append(str(cuda_include))
++    for site_package in site.getsitepackages():
++        nvidia_dir = Path(site_package) / "nvidia"
++        if not nvidia_dir.is_dir():
++            continue
++        for include_dir in nvidia_dir.glob("*/include"):
++            if not include_dir.is_dir():
++                continue
++            if include_dir.parent.name.startswith("cu13"):
++                continue
++            include_dirs.append(str(include_dir))
++    return include_dirs
++
+@@ -65 +88,0 @@ NVCC_FLAGS = [
+-    "-Xcompiler", "-include,cassert", # fix error occurs when compiling for SM90+ with newer CUDA toolkits
+@@ -70,0 +94 @@ NVCC_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
++NVIDIA_INCLUDE_DIRS = get_nvidia_include_dirs()
+@@ -155 +179,2 @@ for capability in compute_capabilities:
+-    num = capability.replace(".", "")
++    base_capability = capability.removesuffix("+PTX")
++    num = base_capability.replace(".", "")
+@@ -159,0 +185,3 @@ for capability in compute_capabilities:
++    if num == '89':
++        HAS_SM89 = True
++        CXX_FLAGS += ["-DHAS_SM89"]
+@@ -160,0 +189,2 @@ for capability in compute_capabilities:
++        HAS_SM80 = True
++        CXX_FLAGS += ["-DHAS_SM80"]
+@@ -172,4 +201,0 @@ ext_modules = []
+-run_instantiations("csrc/qattn/instantiations_sm80")
+-run_instantiations("csrc/qattn/instantiations_sm89")
+-run_instantiations("csrc/qattn/instantiations_sm90")
+-
+@@ -178,3 +204,11 @@ sources = [
+-    "csrc/qattn/qk_int_sv_f16_cuda_sm80.cu",
+-    "csrc/qattn/qk_int_sv_f8_cuda_sm89.cu",
+-] + get_instantiations("csrc/qattn/instantiations_sm80") + get_instantiations("csrc/qattn/instantiations_sm89")
++]
++
++if HAS_SM80:
++    run_instantiations("csrc/qattn/instantiations_sm80")
++    sources += ["csrc/qattn/qk_int_sv_f16_cuda_sm80.cu"]
++    sources += get_instantiations("csrc/qattn/instantiations_sm80")
++
++if HAS_SM89:
++    run_instantiations("csrc/qattn/instantiations_sm89")
++    sources += ["csrc/qattn/qk_int_sv_f8_cuda_sm89.cu"]
++    sources += get_instantiations("csrc/qattn/instantiations_sm89")
+@@ -182,0 +217 @@ if HAS_SM90:
++    run_instantiations("csrc/qattn/instantiations_sm90")
+@@ -188,0 +224 @@ qattn_extension = CUDAExtension(
++    include_dirs=NVIDIA_INCLUDE_DIRS,
+@@ -199,0 +236 @@ fused_extension = CUDAExtension(
++    include_dirs=NVIDIA_INCLUDE_DIRS,
