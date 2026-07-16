@@ -237,6 +237,7 @@ class ImaginaireTrainer:
         self.callbacks.on_train_end(model, iteration=iteration)
         self.checkpointer.finalize()
         distributed.barrier()
+        distributed.destroy_process_group()
         self.callbacks.on_app_end()
 
     def training_step(
