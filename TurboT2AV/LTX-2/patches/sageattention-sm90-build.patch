@@ -1,0 +1,30 @@
+diff --git a/setup.py b/setup.py
+index 6b2c5b4..0fe207c 100644
+--- a/setup.py
++++ b/setup.py
+@@ -127,0 +128,2 @@ if not SKIP_CUDA_BUILD:
++    target_nvcc_flags = []
++    sm90_nvcc_flags = []
+@@ -167 +169 @@ if not SKIP_CUDA_BUILD:
+-        NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
++        arch_flags = ["-gencode", f"arch=compute_{num},code=sm_{num}"]
+@@ -169 +171,6 @@ if not SKIP_CUDA_BUILD:
+-            NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=compute_{num}"]
++            arch_flags += ["-gencode", f"arch=compute_{num},code=compute_{num}"]
++        target_nvcc_flags += arch_flags
++        if num == "90a":
++            sm90_nvcc_flags += arch_flags
++
++    all_nvcc_flags = NVCC_FLAGS + target_nvcc_flags
+@@ -182 +189 @@ if not SKIP_CUDA_BUILD:
+-                extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
++                extra_compile_args={"cxx": CXX_FLAGS, "nvcc": all_nvcc_flags},
+@@ -200 +207 @@ if not SKIP_CUDA_BUILD:
+-                extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
++                extra_compile_args={"cxx": CXX_FLAGS, "nvcc": all_nvcc_flags},
+@@ -212 +219 @@ if not SKIP_CUDA_BUILD:
+-                extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
++                extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS + sm90_nvcc_flags},
+@@ -221 +228 @@ if not SKIP_CUDA_BUILD:
+-            extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
++            extra_compile_args={"cxx": CXX_FLAGS, "nvcc": all_nvcc_flags},

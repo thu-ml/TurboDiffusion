@@ -1,0 +1,37 @@
+[project]
+name = "ltx-core"
+version = "1.0.0"
+description = "Core implementation of Lightricks' LTX-2 model"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch==2.7.0",
+    "torchaudio==2.7.0",
+    "einops",
+    "numpy",
+    "transformers~=4.57.0",
+    "safetensors",
+    "accelerate",
+    "scipy>=1.14",
+]
+
+[project.optional-dependencies]
+xformers = ["xformers"]
+
+
+[tool.uv.sources]
+xformers = { index = "pytorch" }
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[build-system]
+requires = ["uv_build>=0.9.8,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "scikit-image>=0.25.2",
+]
