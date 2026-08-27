@@ -14,16 +14,16 @@ Measured on a single NVIDIA H20 at `1024x1792`:
 
 | Stage | Latency | Speedup vs previous | Speedup vs teacher | What changes |
 | --- | ---: | ---: | ---: | --- |
-| LTX-2-19B teacher (40 steps) | 318.7405s | - | 1.00x | Full teacher baseline with dense attention. |
-| + W8A8 & FastNorm | 233.3424s | 1.37x | 1.37x | Add TileLang W8A8 Linear and FastNorm to the teacher. |
-| + rCM (4-step student) | 12.1655s | 19.18x | 26.20x | Switch to the distilled student while retaining W8A8/FastNorm. |
-| + SageSLA final | 5.8505s | 2.08x | 54.48x | Add SageSLA `topk=0.3` self-attention and text-context trimming. |
+| LTX-2-19B teacher (40 steps) | 318.74s | - | 1.00x | Full teacher baseline with dense attention. |
+| + W8A8 & FastNorm | 233.34s | 1.37x | 1.37x | Add TileLang W8A8 Linear and FastNorm to the teacher. |
+| + rCM (4-step student) | 12.16s | 19.18x | 26.27x | Switch to the distilled student while retaining W8A8/FastNorm. |
+| + SageSLA final | 5.83s | 2.08x | 54.67x | Add SageSLA `topk=0.3` self-attention and text-context trimming. |
 
 At this resolution the video latent is `[1,16,128,32,56]`, corresponding to
 28,672 video self-attention tokens. The stages are cumulative: rCM keeps the
 W8A8/FastNorm stack, and the final stage adds SageSLA and text-context
 trimming. For reference, the pure 4-step student without these inference
-optimizations takes 16.5245s/video, so the final path is also 2.82x faster than
+optimizations takes 16.50s/video, so the final path is also 2.83x faster than
 the pure student.
 
 See [TurboDiffusion Integration Notes](docs/acceleration.md) for the reused
@@ -35,7 +35,7 @@ TurboT2VA generates synchronized audio-video from text prompts in 4 steps.
 The demo compares the 40-step teacher with the 4-step student.
 This repository provides single-GPU inference for the distilled checkpoint.
 On an NVIDIA H20 at 1024x1792, generator-only latency falls from 318.74
-seconds/video for the 40-step teacher to 5.85 seconds/video for the accelerated
+seconds/video for the 40-step teacher to 5.83 seconds/video for the accelerated
 4-step student.
 
 Main contributions:
@@ -48,7 +48,7 @@ Main contributions:
   audio-video generation model at the 14B-video + 5B-audio scale.
 - Integrates a TurboDiffusion-style inference stack with SageSLA, FastNorm, and
   TileLang W8A8 Linear. On a single NVIDIA H20 at 1024x1792, the final
-  accelerated student is 54.48x faster than the 40-step teacher and 2.82x
+  accelerated student is 54.67x faster than the 40-step teacher and 2.82x
   faster than the pure 4-step student.
 
 ## 1. Setup
