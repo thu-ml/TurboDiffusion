@@ -1,6 +1,6 @@
 <div align="center">
 
-# TurboT2AV
+# TurboT2VA
 
 Fast text-to-audio-video generation distilled from LTX-2 19B.
 
@@ -8,7 +8,7 @@ Fast text-to-audio-video generation distilled from LTX-2 19B.
 
 ## TurboDiffusion-Style Acceleration
 
-![TurboT2AV TD-style acceleration decomposition at 1024x1792](assets/turbot2av_td_style_1024x1792.png)
+![TurboT2VA TD-style acceleration decomposition at 1024x1792](assets/turbot2va.jpg)
 
 Measured on a single NVIDIA H20 at `1024x1792`:
 
@@ -31,7 +31,7 @@ components, LTX-2-specific adaptations, and interpretation of these results.
 
 ## Overview
 
-TurboT2AV generates synchronized audio-video from text prompts in 4 steps.
+TurboT2VA generates synchronized audio-video from text prompts in 4 steps.
 The demo compares the 40-step teacher with the 4-step student.
 This repository provides single-GPU inference for the distilled checkpoint.
 On an NVIDIA H20 at 1024x1792, generator-only latency falls from 318.74
@@ -54,7 +54,7 @@ Main contributions:
 ## 1. Setup
 
 ```bash
-cd TurboDiffusion/TurboT2AV/LTX-2
+cd TurboDiffusion/turbot2va/LTX-2
 pixi install
 pixi run install-acceleration
 ```
@@ -79,7 +79,7 @@ not need this step.
 
 | Model Name | Checkpoint Link |
 | --- | --- |
-| TurboT2AV-14BVideo-5BAudio | [Hugging Face Model](https://huggingface.co/luyu1021/TurboT2AV) |
+| TurboT2VA-14BVideo-5BAudio | [Hugging Face Model](https://huggingface.co/luyu1021/TurboT2AV) |
 | LTX-2-19B | [Hugging Face Model](https://huggingface.co/Lightricks/LTX-2) |
 | Gemma-3-12B-IT-QAT-Q4_0 | [Hugging Face Model](https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized) |
 
@@ -97,7 +97,7 @@ pixi run hf download Lightricks/LTX-2 ltx-2-19b-dev.safetensors --local-dir /pat
 pixi run hf download google/gemma-3-12b-it-qat-q4_0-unquantized --local-dir /path/to/checkpoints/gemma-3-12b-it-qat-q4_0-unquantized
 ```
 
-TurboT2AV main checkpoint:
+TurboT2VA main checkpoint:
 
 ```bash
 pixi run hf download luyu1021/TurboT2AV \
@@ -107,7 +107,7 @@ pixi run hf download luyu1021/TurboT2AV \
 
 ## 3. Run Inference
 
-Run the following commands from `TurboDiffusion/TurboT2AV/LTX-2`:
+Run the following commands from `TurboDiffusion/turbot2va/LTX-2`:
 
 ```bash
 export TURBO_CHECKPOINT_PATH=/path/to/ltx-2-19b-dev.safetensors
@@ -196,3 +196,19 @@ CUDA_VISIBLE_DEVICES=0 pixi run python -m ltx_distillation.tools.run_av_inferenc
     </tr>
   </tbody>
 </table>
+
+## Citation
+
+If you find this work useful, please cite:
+
+```bibtex
+@misc{yang2026turbot2vafastlargescaletexttovideoaudio,
+ title={TurboT2VA: Fast Large-Scale Text-to-Video-Audio Generation via Score-Regularized Consistency Distillation},
+ author={Xiaoda Yang and Yuxiang Liu and Kaiwen Zheng and Yuan Liu and Yibo Lai and Shengpeng Ji and Kai Jiang and Jianfei Chen and Xiaobin Hu and Shuicheng Yan and Jintao Zhang and Jun Zhu and Zhou Zhao},
+ year={2026},
+ eprint={2608.24674},
+ archivePrefix={arXiv},
+ primaryClass={cs.CV},
+ url={https://arxiv.org/abs/2608.24674},
+}
+```
