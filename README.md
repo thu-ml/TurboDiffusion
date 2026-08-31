@@ -194,6 +194,48 @@ For GPUs with more than 40GB of GPU memory, **e.g., H100, please use the unquant
 
 Interactive inference via the terminal is available at `turbodiffusion/serve/`. This allows multi-turn video generation without reloading the model.
 
+### Memory Optimization: Pre-caching T5 Embeddings
+
+The umT5-XXL text encoder requires ~11GB VRAM, which can cause OOM on 32GB GPUs when combined with the DiT models. To avoid this, you can pre-cache text embeddings in a separate pass:
+
+**Memory Comparison:**
+| Approach | Peak VRAM | Notes |
+|----------|-----------|-------|
+| Standard (T5 + DiT) | ~30GB+ | May OOM on 32GB GPUs |
+| Cached embeddings | ~18GB | T5 never loaded during inference |
+
+**Step 1: Cache the embedding (loads T5, encodes prompt, saves to file, unloads T5)**
+```bash
+python scripts/cache_t5.py \
+    --prompt "slow head turn, cinematic" \
+    --output cached_embeddings.pt
+```
+
+**Step 2: Run inference with cached embedding (T5 never loaded)**
+```bash
+python turbodiffusion/inference/wan2.2_i2v_infer.py \
+    --cached_embedding cached_embeddings.pt \
+    --skip_t5 \
+    --model Wan2.2-A14B \
+    --low_noise_model_path checkpoints/TurboWan2.2-I2V-A14B-low-720P-quant.pth \
+    --high_noise_model_path checkpoints/TurboWan2.2-I2V-A14B-high-720P-quant.pth \
+    --image_path your_image.jpg \
+    --prompt "slow head turn, cinematic" \
+    --quant_linear --attention_type sagesla --ode
+```
+
+You can cache multiple prompts at once:
+```bash
+# Create a prompts file
+echo "slow head turn, cinematic" > prompts.txt
+echo "walking forward, dramatic lighting" >> prompts.txt
+
+# Cache all prompts
+python scripts/cache_t5.py --prompts_file prompts.txt --output my_prompts.pt
+```
+
+The cached file is only ~4MB per prompt, compared to the 11GB T5 model.
+
 
 ## Evaluation
 
