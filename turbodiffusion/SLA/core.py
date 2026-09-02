@@ -17,6 +17,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Check for ROCm
+IS_ROCM = torch.version.hip is not None
+
 SAGESLA_ENABLED = True
 try:
     import spas_sage_attn._qattn as qattn
@@ -182,10 +185,19 @@ class SageSparseLinearAttention(nn.Module):
         k = k.transpose(1, 2).contiguous()
         v = v.transpose(1, 2).contiguous()
         
-        arch = get_cuda_arch(q.device.index)
+        arch = get_cuda_arch(q.device.index) if not IS_ROCM else "rocm"
+        headdim = q.size(-1)
         if arch == "sm90":
             sparse_map, lut, real_topk = get_block_map(q, k, topk_ratio=self.topk, BLKQ=64, BLKK=128)
+        elif IS_ROCM:
+            # ROCm: use smaller tiles for head_dim=128 to reduce register pressure
+            # head_dim=64: CTA_Q=64, CTA_K=64
+            # head_dim=128: CTA_Q=32, CTA_K=16 (best performance at 10% sparsity)
+            blkq = 32 if headdim == 128 else 64
+            blkk = 16 if headdim == 128 else 64
+            sparse_map, lut, real_topk = get_block_map(q, k, topk_ratio=self.topk, BLKQ=blkq, BLKK=blkk)
         else:
+            # Use 128x64 blocks for sm80-like archs
             sparse_map, lut, real_topk = get_block_map(q, k, topk_ratio=self.topk, BLKQ=128, BLKK=64)
 
         q = q.to(self.dtype)
@@ -195,26 +207,46 @@ class SageSparseLinearAttention(nn.Module):
         ########## SPARGE BEGIN ##########
 
         km = k.mean(dim=-2, keepdim=True)
-        headdim = q.size(-1)
         
         if arch == "sm90":
             q_int8, q_scale, k_int8, k_scale = get_vanilla_qk_quant(q, k, km, 64, 128)
+        elif IS_ROCM:
+            # ROCm: use smaller tiles for head_dim=128 to reduce register pressure
+            # head_dim=64: CTA_Q=64, CTA_K=64
+            # head_dim=128: CTA_Q=32, CTA_K=16 (best performance at 10% sparsity)
+            blkq = 32 if headdim == 128 else 64
+            blkk = 16 if headdim == 128 else 64
+            q_int8, q_scale, k_int8, k_scale = get_vanilla_qk_quant(q, k, km, blkq, blkk)
         else:
+            # Use 128x64 block sizes for sm80-like archs
             q_int8, q_scale, k_int8, k_scale = get_vanilla_qk_quant(q, k, km, 128, 64)
         lut, valid_block_num = block_map_lut_triton(sparse_map)
         scale = 1.0 / (headdim ** 0.5)
 
         assert headdim in [64, 128], "headdim should be in [64, 128]. For other headdim, you can use padding and specify the softmax scale."
 
-        o_s = torch.empty_like(q)
-
-        if arch in ("sm80", "sm86", "sm87"):
+        if IS_ROCM:
+            # ROCm: kernel natively supports both float16 and bfloat16
+            o_s = torch.empty_like(q)
+            pvthreshold = torch.full((q.shape[-3],), 1e6, dtype=torch.float32, device=q.device)
+            # Pass V in its native dtype (fp16 or bf16) - kernel handles both
+            qattn.qk_int8_sv_f16_accum_f16_block_sparse_attn_inst_buf_with_pv_threshold(
+                q_int8, k_int8, v, o_s, lut, valid_block_num, pvthreshold, q_scale, k_scale, 1, False, 1, scale, 0
+            )
+        elif arch in ("sm80", "sm86", "sm87"):
+            # NVIDIA sm80-sm87: requires FP16 V, kernel outputs float16
+            o_s = torch.empty(q.shape, dtype=torch.float16, device=q.device)
             pvthreshold = torch.full((q.shape[-3],), 1e6, dtype=torch.float32, device=q.device)
             v_fp16 = v.to(torch.float16)
+            
             qattn.qk_int8_sv_f16_accum_f16_block_sparse_attn_inst_buf_with_pv_threshold(
                 q_int8, k_int8, v_fp16, o_s, lut, valid_block_num, pvthreshold, q_scale, k_scale, 1, False, 1, scale, 0
             )
+            # Convert back to original dtype (may be bfloat16)
+            o_s = o_s.to(self.dtype)
         else:
+            # NVIDIA sm89+: use FP8 V kernels
+            o_s = torch.empty_like(q)
             b, h_kv, kv_len, head_dim = v.shape
             padded_len = (kv_len + 127) // 128 * 128
             v_transposed_permutted = torch.empty((b, h_kv, head_dim, padded_len), dtype=v.dtype, device=v.device)

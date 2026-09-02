@@ -1,5 +1,48 @@
 #pragma once
 
+// Include common_hip.hpp for CUTLASS macro definitions when building for HIP
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#include "common/common_hip.hpp"
+#include <hip/hip_fp16.h>
+#include <hip/hip_bfloat16.h>
+
+// Helper functions for type conversion on HIP
+namespace turbo_hip {
+
+template <typename T>
+__device__ __forceinline__ T from_float(float val) {
+    return static_cast<T>(val);
+}
+
+template <>
+__device__ __forceinline__ __half from_float<__half>(float val) {
+    return __float2half(val);
+}
+
+template <>
+__device__ __forceinline__ hip_bfloat16 from_float<hip_bfloat16>(float val) {
+    return hip_bfloat16(val);
+}
+
+template <typename T>
+__device__ __forceinline__ float to_float(T val) {
+    return static_cast<float>(val);
+}
+
+template <>
+__device__ __forceinline__ float to_float<__half>(__half val) {
+    return __half2float(val);
+}
+
+template <>
+__device__ __forceinline__ float to_float<hip_bfloat16>(hip_bfloat16 val) {
+    return static_cast<float>(val);
+}
+
+} // namespace turbo_hip
+
+#endif
+
 template <
   class InputDtype_,
   int TileM_,
@@ -30,8 +73,13 @@ public:
     void const *thr_input_ptr = (void*)((InputDtype*)cta_input_ptr + thr_m_offset * n + thr_n_offset);
     InputDtype tmp_reg[NumElementPerThread];
     CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < NumElementPerThread; ++i)
+    for (int i = 0; i < NumElementPerThread; ++i) {
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+      tmp_reg[i] = turbo_hip::from_float<InputDtype>(0.f);
+#else
       tmp_reg[i] = InputDtype(0.f);
+#endif
+    }
     bool pred = IsEvenM ? true : thr_m_offset + blk_m * TileM < m;
     int limit = IsEvenN ? NumElementPerThread : MIN(NumElementPerThread, n - (blk_n * TileN + thr_n_offset));
     if (n_alignment % 128 == 0)
@@ -42,8 +90,13 @@ public:
       _load<InputDtype, IsEvenN>(thr_input_ptr, (void*)tmp_reg, limit, pred);
 
     CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < NumElementPerThread; ++i)
+    for (int i = 0; i < NumElementPerThread; ++i) {
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+      *((float*)thr_output_reg + i) = turbo_hip::to_float<InputDtype>(tmp_reg[i]);
+#else
       *((float*)thr_output_reg + i) = static_cast<float>(reinterpret_cast<InputDtype const&>(tmp_reg[i]));
+#endif
+    }
   }
 
 private:
