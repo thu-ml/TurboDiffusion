@@ -664,8 +664,16 @@ class MLPProj(torch.nn.Module):
     def __init__(self, in_dim, out_dim, flf_pos_emb=False):
         super().__init__()
 
-        # BUG: mismatch with original Wan I2V; to be fixed
-        self.proj = torch.nn.Sequential(WanLayerNorm(in_dim), nn.Linear(in_dim, in_dim), nn.GELU(), nn.Linear(in_dim, out_dim), WanLayerNorm(out_dim))
+        # Keep the image-conditioning projector compatible with the published
+        # Wan I2V checkpoints.  Those checkpoints contain affine parameters
+        # for both LayerNorms (and use the PyTorch default epsilon).
+        self.proj = torch.nn.Sequential(
+            nn.LayerNorm(in_dim),
+            nn.Linear(in_dim, in_dim),
+            nn.GELU(),
+            nn.Linear(in_dim, out_dim),
+            nn.LayerNorm(out_dim),
+        )
         if flf_pos_emb:  # NOTE: we only use this for `flf2v`
             self.emb_pos = nn.Parameter(torch.zeros(1, FIRST_LAST_FRAME_CONTEXT_TOKEN_NUMBER, 1280))
 
