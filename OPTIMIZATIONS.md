@@ -6,8 +6,9 @@ control-flow-only — no accuracy/quality trade-off is introduced. They were ver
 (functional equivalence tests, cache-safety tests, and static source checks); see
 [Verification](#verification).
 
-The impact estimates below are computed for **Wan2.1-1.3B @ 480p, 81 frames** (seq. length
-L = 131,040 tokens, 30 blocks × 4 sampling steps ≈ 120 block evaluations per generation).
+The impact estimates below are computed for **Wan2.1-1.3B @ 480p, 81 frames** (transformer
+sequence length L = 32,760 tokens — the 21×60×104 latent grid after the (1,2,2) patchify —
+30 blocks × 4 sampling steps ≈ 120 block evaluations per generation).
 
 ---
 
@@ -15,10 +16,10 @@ L = 131,040 tokens, 30 blocks × 4 sampling steps ≈ 120 block evaluations per 
 
 | # | Change | File(s) | Waste removed per generation |
 |---|--------|---------|------------------------------|
-| 1 | `torch.zeros` → `torch.empty` for the Int8 GEMM output buffer | `turbodiffusion/ops/core.py` | Full memset of every quantized-linear output immediately overwritten by the GEMM (hundreds of GB of writes) |
-| 2 | Norm kernels consume/produce the activation dtype natively (no external fp32 round-trip casts) | `turbodiffusion/ops/core.py` | ~2 extra full-tensor passes (≈2.4 GB traffic each at 480p) × ~600 norm calls |
+| 1 | `torch.zeros` → `torch.empty` for the Int8 GEMM output buffer | `turbodiffusion/ops/core.py` | Full memset of every quantized-linear output immediately overwritten by the GEMM (≈180 GB of writes per 480p generation) |
+| 2 | Norm kernels consume/produce the activation dtype natively (no external fp32 round-trip casts) | `turbodiffusion/ops/core.py` | ~2 extra full-tensor passes per call (≈0.6 GB saved per call at 480p) × ~500 norm calls |
 | 3 | Weight/bias loads in the norm Triton kernels masked | `turbodiffusion/ops/core.py` | Out-of-bounds reads (up to `next_pow2(N) − N` floats past the weight buffer) |
-| 4 | `km = k.mean(...)` computed once and shared with `get_block_map` | `turbodiffusion/SLA/core.py`, `turbodiffusion/SLA/utils.py` | One duplicate ~400 MB reduction over k × 240 SageSLA calls |
+| 4 | `km = k.mean(...)` computed once and shared with `get_block_map` | `turbodiffusion/SLA/core.py`, `turbodiffusion/SLA/utils.py` | One duplicate ~50 MB reduction over k × 240 SageSLA calls |
 | 5 | RoPE cos/sin cached across attention calls | `turbodiffusion/rcm/networks/wan2pt1.py`, `wan2pt2.py` | ~470 redundant `cos`/`sin` kernel launches + allocations per generation |
 | 6 | Position-embedding generation cached per (T, H, W) across sampling steps | `turbodiffusion/rcm/networks/wan2pt1.py`, `wan2pt2.py` | Repeat/cat/rearrange embedding chain recomputed on every step |
 | 7 | Per-step `.item()` GPU sync removed from both I2V sampling loops | `turbodiffusion/inference/wan2.2_i2v_infer.py`, `turbodiffusion/serve/pipeline.py` | CPU launch pipelining serialized behind GPU drain on every sampling step |
@@ -37,8 +38,9 @@ constant for `FastInt2Float`), the kernel never reads `Dptr`, and every output e
 `[0, m) × [0, n)` is written exactly once (predicated stores for uneven tiles; no split-K
 accumulation). Zero-initialization therefore has no effect and only costs bandwidth.
 
-For the 1.3B model at 480p, each q/k/v/o projection output is ~402 MB of bf16 and each FFN
-intermediate is ~2.35 GB — the memsets alone amounted to a significant fraction of E2E time.
+For the 1.3B model at 480p, each q/k/v/o projection output is ~100 MB of bf16 and each FFN
+intermediate is ~590 MB — ≈180 GB of pure memset traffic per generation, a significant fraction
+of E2E time.
 
 *Note: `can_implement()` requires `k % BlockSize == 0` and `(n · sizeof(dtype)) % 16 == 0`,
 which every Wan block linear satisfies (`k, n ∈ {1536, 5120, 8960, 13824}`); the wrapped layers
@@ -55,7 +57,8 @@ return rmsnorm(x.float(), self.weight, self.eps).to(x.dtype)
 
 The Triton kernels already upcast on load (`tl.load(...).to(tl.float32)`) and round once on
 store (`y.to(Y.type.element_ty)`), so the external casts were pure memory traffic — roughly
-3.2 GB of traffic per call instead of 0.8 GB at 480p, across ~600 calls per generation
+0.8 GB of traffic per call instead of 0.2 GB at 480p, across ~500 calls per generation
+(≈300 GB of redundant traffic per generation)
 (`norm_q`/`norm_k`, `norm1`/`norm2`/`norm3` and the head norm, per block, per step):
 
 ```python
@@ -176,4 +179,38 @@ outputs should be identical given the same seed, since no numerics changed.
 Self-attention projects q/k/v with three separate `Int8Linear` layers that each re-quantize the
 same activation (`int8_quant(x)` runs 3× per block). Fusing them into a single QKV linear would
 remove 2 of the 3 quantization passes per block per step, but requires checkpoint key remapping
-at load time (`q/k/v.weight → qkv.weight`) and is left for a future change.
+at load time (`q/k/v.weight → qkv.weight`). At 480p the duplicate-quant traffic is only ≈30 GB per
+generation (≈1–2 % of E2E), so this is a modest win for its complexity.
+
+---
+
+## Remaining opportunities (not implemented)
+
+Ranked by estimated impact at 480p; all need on-GPU validation before shipping.
+
+1. **Fuse the fp32 modulation chains (or opt-in `torch.compile`).**
+   `WanAttentionBlock.forward` computes `(self.norm1(x).float() * (1 + e[1]) + e[0]).type_as(x)`
+   and the FFN equivalent as four separate eager kernels in fp32 over the full activation, and
+   `Head` repeats the pattern (`self.head(self.norm(x) * (1 + e[1]) + e[0])`): ≈1.4 GB of traffic
+   per site vs ≈0.2 GB if fused — ≈340 GB per generation at 480p, roughly 5–10 % of E2E.
+   `torch.compile` fuses these chains automatically: the custom Int8-GEMM and SLA Triton kernels
+   graph-break around them, but the pointwise chains in between still compile, and
+   `torch._dynamo.config.suppress_errors = True` is already set in the inference scripts, so an
+   opt-in `--torch_compile` flag degrades to eager on failure. A hand-written fused Triton kernel
+   is the alternative, but its fma contraction rounds ±1 ulp differently from eager — not
+   bit-identical, so it belongs in a separate change.
+2. **CUDA graphs** (`torch.compile(mode="reduce-overhead")` or manual capture): the token count is
+   static across the sampling steps, so the step is capturable in principle; the win is kernel
+   launch overhead on the small 1.3B model. Needs capture-safe (pool-allocated) buffers in the
+   quant/SLA path.
+3. **I2V: skip the model offload ping-pong when VRAM allows.** The high→low noise switch does
+   `model.cpu()` + `empty_cache()` + reload; on an 80 GB H100 both int8-quantized 14B models fit
+   in VRAM at once, so guarding the offload with `torch.cuda.mem_get_info()` saves a ~2×14 GB
+   PCIe round-trip (≈5–10 s) per I2V generation; on 24–32 GB cards the guard keeps the offload.
+4. **Cross-attention K/V caching across steps.** The text/image context is constant across the
+   sampling steps, so each block's cross-attn k/v (+ their int8 quants, ~6 kernels/block) could be
+   computed once and reused (weakref-keyed like the rope cache). Only a few ms per generation —
+   low priority.
+
+Checked and already fine: the T5 text encoder runs in bf16; VAE decode is chunked with a feature
+cache; no `.item()`/`.cpu()`/`synchronize` calls remain on the per-step path (AST-scanned).
