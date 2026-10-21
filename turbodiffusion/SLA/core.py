@@ -183,10 +183,14 @@ class SageSparseLinearAttention(nn.Module):
         v = v.transpose(1, 2).contiguous()
         
         arch = get_cuda_arch(q.device.index)
+        # Computed once here and shared with get_block_map, which would otherwise
+        # redo this full reduction over k. In the bf16 pipeline the .to(self.dtype)
+        # casts below are no-ops, so this km is bit-identical to the old one.
+        km = k.mean(dim=-2, keepdim=True)
         if arch == "sm90":
-            sparse_map, lut, real_topk = get_block_map(q, k, topk_ratio=self.topk, BLKQ=64, BLKK=128)
+            sparse_map, lut, real_topk = get_block_map(q, k, topk_ratio=self.topk, BLKQ=64, BLKK=128, km=km)
         else:
-            sparse_map, lut, real_topk = get_block_map(q, k, topk_ratio=self.topk, BLKQ=128, BLKK=64)
+            sparse_map, lut, real_topk = get_block_map(q, k, topk_ratio=self.topk, BLKQ=128, BLKK=64, km=km)
 
         q = q.to(self.dtype)
         k = k.to(self.dtype)
@@ -194,7 +198,6 @@ class SageSparseLinearAttention(nn.Module):
 
         ########## SPARGE BEGIN ##########
 
-        km = k.mean(dim=-2, keepdim=True)
         headdim = q.size(-1)
         
         if arch == "sm90":

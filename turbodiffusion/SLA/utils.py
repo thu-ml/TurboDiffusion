@@ -52,8 +52,10 @@ def mean_pool(x, BLK):
     return x_mean
 
 
-def get_block_map(q, k, topk_ratio, BLKQ=64, BLKK=64):
-    arg_k = k - torch.mean(k, dim=-2, keepdim=True) # smooth-k technique in SageAttention
+def get_block_map(q, k, topk_ratio, BLKQ=64, BLKK=64, km=None):
+    if km is None:
+        km = torch.mean(k, dim=-2, keepdim=True)
+    arg_k = k - km # smooth-k technique in SageAttention
     pooled_qblocks = mean_pool(q, BLKQ)
     pooled_kblocks = mean_pool(arg_k, BLKK)
     pooled_score = pooled_qblocks @ pooled_kblocks.transpose(-1, -2)
@@ -67,6 +69,12 @@ def get_block_map(q, k, topk_ratio, BLKQ=64, BLKK=64):
     return sparse_map, lut, topk
 
 
+_CUDA_ARCH_CACHE = {}
+
 def get_cuda_arch(device_index):
-    major, minor = torch.cuda.get_device_capability(device_index)
-    return f"sm{major}{minor}"
+    arch = _CUDA_ARCH_CACHE.get(device_index)
+    if arch is None:
+        major, minor = torch.cuda.get_device_capability(device_index)
+        arch = f"sm{major}{minor}"
+        _CUDA_ARCH_CACHE[device_index] = arch
+    return arch

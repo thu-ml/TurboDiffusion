@@ -16,6 +16,7 @@
 # from Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 
 import math
+import weakref
 from typing import Optional
 
 import torch
@@ -153,6 +154,35 @@ def sinusoidal_embedding_1d(dim, position):
     return x
 
 
+_ROPE_COS_SIN_CACHE = {}
+
+
+def _rope_cos_sin(freqs):
+    R"""cos/sin of the RoPE frequencies, cached across attention calls.
+
+    The frequencies are identical for every block and sampling step, but
+    rope_apply used to recompute cos/sin for each attention call. Entries are
+    keyed by the freqs tensor's storage location, shape, device and dtype, and
+    validated against the live tensor through a weak reference, so a recycled
+    memory address can never produce a stale hit.
+    """
+    key = (freqs.data_ptr(), freqs.shape, freqs.device, freqs.dtype)
+    entry = _ROPE_COS_SIN_CACHE.get(key)
+    if entry is not None:
+        freqs_ref, cos, sin = entry
+        if freqs_ref() is freqs:
+            return cos, sin
+    cos = torch.cos(freqs).to(torch.float32)
+    sin = torch.sin(freqs).to(torch.float32)
+    if len(_ROPE_COS_SIN_CACHE) >= 4:
+        for stale_key in [k for k, v in _ROPE_COS_SIN_CACHE.items() if v[0]() is None]:
+            del _ROPE_COS_SIN_CACHE[stale_key]
+        if len(_ROPE_COS_SIN_CACHE) >= 4:
+            _ROPE_COS_SIN_CACHE.clear()
+    _ROPE_COS_SIN_CACHE[key] = (weakref.ref(freqs), cos, sin)
+    return cos, sin
+
+
 def rope_apply(x, freqs):
     """
     Optimized version of rope_apply using flash_attention's rotary embedding implementation.
@@ -167,10 +197,10 @@ def rope_apply(x, freqs):
     """
     batch_size, seq_len, n_heads, head_dim = x.shape
 
+    cos, sin = _rope_cos_sin(freqs)
+
     # freqs is already sharded to local seq_len under flattened CP
     freqs = freqs.view(seq_len, head_dim // 2)
-    cos = torch.cos(freqs).to(torch.float32)
-    sin = torch.sin(freqs).to(torch.float32)
 
     # Apply the rotation
     rotated = flash_apply_rotary_emb(x.to(torch.float32), cos, sin, interleaved=True, inplace=False)
@@ -540,6 +570,27 @@ class WanModel(nn.Module):
 
         self.enable_selective_checkpoint(sac_config)
 
+    def _get_rope_freqs(self, B, T, H, W, device):
+        R"""Position embeddings for the current (T, H, W), cached across calls.
+
+        generate_embeddings depends only on (T, H, W), yet it was recomputed on
+        every model forward, i.e. once per sampling step. The cached tensors are
+        returned read-only (callers only view or split them) and are shared by
+        all blocks within a forward. The cache keeps a few entries so that
+        changing resolution or num_frames does not thrash it.
+        """
+        cache = getattr(self, "_rope_freqs_cache", None)
+        if cache is None:
+            cache = self._rope_freqs_cache = {}
+        key = (T, H, W, device)
+        freqs = cache.get(key)
+        if freqs is None:
+            freqs = self.rope_position_embedding.generate_embeddings(torch.Size([B, T, H, W, self.dim])).contiguous()
+            if len(cache) >= 4:
+                cache.clear()
+            cache[key] = freqs
+        return freqs
+
     def forward(
         self,
         x_B_C_T_H_W,
@@ -617,7 +668,7 @@ class WanModel(nn.Module):
         context_lens = None
         context_B_L_D = self.text_embedding(crossattn_emb)
 
-        freqs = self.rope_position_embedding.generate_embeddings(torch.Size([B, T, H, W, self.dim])).contiguous()
+        freqs = self._get_rope_freqs(B, T, H, W, x_B_C_T_H_W.device)
         if cp_enabled:
             freqs = split_inputs_cp(freqs, seq_dim=self.rope_position_embedding.seq_dim, cp_group=cp_group)
 

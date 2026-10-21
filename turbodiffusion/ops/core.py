@@ -50,7 +50,9 @@ def int8_linear(
     x = x.reshape(-1, shape[-1])
     m = x.shape[0]
     n = w_q.shape[0]
-    y = torch.zeros(m, n, dtype=x.dtype, device=x.device)
+    # The GEMM kernel clears its accumulator and fully overwrites every element of
+    # y (no split-K accumulation, no read of y), so it does not need zero-init.
+    y = torch.empty(m, n, dtype=x.dtype, device=x.device)
 
     x_q, x_s = int8_quant(x)
     gemm_cuda(x_q, x_s, w_q, w_s, y)
@@ -127,7 +129,7 @@ def _rms_norm_fwd_fused(
     rstd = tl.reshape(rstd, (BLOCK_M, 1))
 
     # Normalize and apply linear transformation
-    w = tl.load(W + cols)
+    w = tl.load(W + cols, mask=mask, other=0.0)
     x_hat = x * rstd
     y = x_hat * w
 
@@ -232,9 +234,9 @@ def _layer_norm_param_fwd_fused(
     # Normalize and apply linear transformation
     x_hat = (x - mean) * rstd
 
-    w = tl.load(W + cols)
-    b = tl.load(B + cols)
-    
+    w = tl.load(W + cols, mask=mask, other=0.0)
+    b = tl.load(B + cols, mask=mask, other=0.0)
+
     x_hat = x_hat * w + b
 
     # Write output
@@ -246,16 +248,17 @@ def layernorm_param(x, w, b, eps):
     # Change batched 3D input to 2D
     [x], batched, BS = flatten_if_batched(x)
 
-    # allocate output
+    # allocate output (same dtype as input; the kernel computes in fp32 and
+    # rounds once when storing to Y.type.element_ty)
     M, N = x.shape
-    y = torch.empty_like(x, dtype=torch.float32)
+    y = torch.empty_like(x)
     mean = torch.empty((M,), dtype=torch.float32, device=x.device)
     rstd = torch.empty((M,), dtype=torch.float32, device=x.device)
     # heuristics for number of warps
     num_warps = 8
 
     N2 = triton.next_power_of_2(N)
-    
+
     if N <= 512:
         BLOCK_M = 32
     else:
@@ -341,16 +344,17 @@ def layernorm_noparam(x, eps):
     # Change batched 3D input to 2D
     [x], batched, BS = flatten_if_batched(x)
 
-    # allocate output
+    # allocate output (same dtype as input; the kernel computes in fp32 and
+    # rounds once when storing to Y.type.element_ty)
     M, N = x.shape
-    y = torch.empty_like(x, dtype=torch.float32)
+    y = torch.empty_like(x)
     mean = torch.empty((M,), dtype=torch.float32, device=x.device)
     rstd = torch.empty((M,), dtype=torch.float32, device=x.device)
     # heuristics for number of warps
     num_warps = 8
 
     N2 = triton.next_power_of_2(N)
-    
+
     if N <= 512:
         BLOCK_M = 32
     else:
@@ -439,7 +443,9 @@ class FastRMSNorm(nn.Module):
         self.register_buffer("weight", torch.ones(dim))
 
     def forward(self, x):
-        return rmsnorm(x.float(), self.weight, self.eps).to(x.dtype)
+        # rmsnorm upcasts to fp32 in-register inside the kernel and stores in
+        # x.dtype, so no explicit fp32 round-trip of the whole tensor is needed.
+        return rmsnorm(x, self.weight, self.eps)
 
     @classmethod
     def from_rmsnorm(cls, original_rmsnorm):
@@ -475,7 +481,9 @@ class FastLayerNorm(nn.Module):
             self.register_parameter("bias", None)
 
     def forward(self, x):
-        return layernorm(x.float(), self.weight, self.bias, self.eps, self.elementwise_affine).to(x.dtype)
+        # layernorm upcasts to fp32 in-register inside the kernel and stores in
+        # x.dtype, so no explicit fp32 round-trip of the whole tensor is needed.
+        return layernorm(x, self.weight, self.bias, self.eps, self.elementwise_affine)
     
     @classmethod
     def from_layernorm(cls, original_layernorm):

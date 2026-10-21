@@ -184,11 +184,15 @@ if __name__ == "__main__":
     x = init_noise.to(torch.float64) * t_steps[0]
     ones = torch.ones(x.size(0), 1, device=x.device, dtype=x.dtype)
     total_steps = t_steps.shape[0] - 1
+    # Single sync up front while the GPU is still idle; reading the boundary
+    # with t_cur.item() inside the loop would serialize the CPU behind the GPU
+    # on every sampling step.
+    t_cur_values = t_steps[:-1].tolist()
     high_noise_model.cuda()
     net = high_noise_model
     switched = False
     for i, (t_cur, t_next) in enumerate(tqdm(list(zip(t_steps[:-1], t_steps[1:])), desc="Sampling", total=total_steps)):
-        if t_cur.item() < args.boundary and not switched:
+        if t_cur_values[i] < args.boundary and not switched:
             high_noise_model.cpu()
             torch.cuda.empty_cache()
             low_noise_model.cuda()
