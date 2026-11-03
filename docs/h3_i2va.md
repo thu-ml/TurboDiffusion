@@ -108,6 +108,8 @@ selection, then makes prefix/suffix query rows and key columns dense for
 text, audio and first-frame conditioning tokens. Blocks are Q128/K64
 (Q64/K128 on SM90), with sinks rounded up to block boundaries. The mask is
 passed as `mask_id`; `pvthreshd=1e6` disables additional PV-based skipping.
+Suffix sink bounds use the actual unpadded Q/K lengths, including partial
+final blocks.
 The public top-k convenience function is not called because it does not
 accept H3's prefix/suffix sink lengths. `turbodiffusion/h3/pooling.py` explicitly
 zero-fills masked tail elements for sequences not divisible by the block size.
@@ -280,6 +282,9 @@ stage commands without starting GPUs or loading model Python code.
 Relative paths in the shipped config resolve against this repository;
 relative paths in custom configs resolve against their config directory.
 CLI path overrides resolve against the working directory.
+An explicit `text_encoder.model_path` follows the same config-relative rule
+and is made absolute before writing `run.yaml`; otherwise it defaults to
+`<model_root>/text_encoder`.
 Older configs referencing a separate inference checkout or a quantized video
 VAE checkpoint should be replaced with `configs/h3_i2va_w8a8.yaml`.
 
@@ -303,7 +308,7 @@ python -m torch.distributed.run --standalone --nproc_per_node=8 \
   tests/h3_sequence_parallel_check.py
 ```
 
-All 49 H3 tests passed with real native W8A8/public SpargeAttn CUDA coverage.
+All 52 H3 tests passed with real native W8A8/public SpargeAttn CUDA coverage.
 The isolated PyTorch 2.11 validation uses the official wheel NCCL and rebuilt
 native W8A8/public SpargeAttn extensions. Tests cover local dense refinement of
 long prompts, FP32 preservation and legacy-checkpoint rejection, padding
@@ -312,7 +317,10 @@ On 2026-11-03, the 513-token SP8/local regression passed for both attention
 backends while retaining FP32 input/output/timestep projections and empty
 rank-zero video/audio shards. Exact SP8 prediction-gather checks cover
 FP32/BF16/FP16 and five empty/nonempty rank layouts. Tests also cover
-AdaLN metadata mismatch rejection, download checksums and EXIF orientation.
+AdaLN metadata mismatch rejection, download checksums, EXIF orientation,
+partial suffix sink blocks and text encoder paths after config relocation.
+The public SpargeAttn CUDA comparison also covers 193/257-token sequences
+with nonzero suffix sinks.
 Fresh four-rank encoding followed by default eight-rank sampling and
 decoding also passed; the optional cache profile passed sample/decode using
 that same freshly encoded conditioning. Both exported 124-frame audio/video

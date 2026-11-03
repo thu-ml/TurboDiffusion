@@ -7,14 +7,18 @@ import torch
 import torch.nn.functional as F
 
 
-def _add_sink_blocks(mask: torch.Tensor, pre: int, post: int, block_q: int, block_k: int) -> None:
+def _add_sink_blocks(
+    mask: torch.Tensor, pre: int, post: int, block_q: int, block_k: int,
+    *, query_length: int, key_length: int,
+) -> None:
     """Preserve dense prefix/suffix query rows and key columns, rounded to blocks."""
     if pre:
         mask[..., : (pre + block_q - 1) // block_q, :] = 1
         mask[..., : (pre + block_k - 1) // block_k] = 1
     if post:
-        mask[..., -((post + block_q - 1) // block_q) :, :] = 1
-        mask[..., -((post + block_k - 1) // block_k) :] = 1
+        # The final block can be partial; start at the first actual suffix token.
+        mask[..., max(query_length - post, 0) // block_q :, :] = 1
+        mask[..., max(key_length - post, 0) // block_k :] = 1
 
 
 def attention_fn(
@@ -59,7 +63,10 @@ def attention_fn(
             mask, _, _ = get_block_map(
                 q, k, max(topk, min_topk), BLKQ=block_q, BLKK=block_k
             )
-            _add_sink_blocks(mask, pre, post, block_q, block_k)
+            _add_sink_blocks(
+                mask, pre, post, block_q, block_k,
+                query_length=q.shape[-2], key_length=k.shape[-2],
+            )
             # Disable additional PV-based skipping so the explicit mask governs sparsity.
             out = block_sparse_sage2_attn_cuda(
                 q, k, v, mask_id=mask, scale=scale, smooth_k=True,

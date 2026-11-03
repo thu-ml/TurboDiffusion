@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import yaml
 
+from turbodiffusion.h3.utils import load_yaml
 from turbodiffusion.inference import h3_i2va_infer as infer
 
 
@@ -121,6 +122,35 @@ class H3InferenceTest(unittest.TestCase):
         args.config = path
         with self.assertRaisesRegex(ValueError, "AdaLN bake"):
             infer.effective_config(args)
+
+    def test_text_encoder_paths_survive_run_config_relocation(self):
+        config_dir = self.root / "config"
+        config_dir.mkdir()
+        config_path = config_dir / "sample.yaml"
+        default_path = self.assets / "shared" / "text_encoder"
+        for model_path, expected in (
+            (None, default_path),
+            ("text-model", config_dir / "text-model"),
+            (str(default_path), default_path),
+        ):
+            with self.subTest(model_path=model_path):
+                source = yaml.safe_load(infer.DEFAULT_CONFIG.read_text())
+                if model_path is not None:
+                    source["text_encoder"]["model_path"] = model_path
+                config_path.write_text(yaml.safe_dump(source))
+                args = self.args(
+                    "--config", str(config_path), "--image", str(self.image),
+                    "--prompt", "test", "--dry-run",
+                )
+                with patch.object(infer, "parse_args", return_value=args), patch.object(
+                    infer.subprocess, "run"
+                ) as run:
+                    infer.main()
+                run.assert_not_called()
+                run_path = self.root / "output" / "run.yaml"
+                cfg = yaml.safe_load(run_path.read_text())
+                self.assertEqual(cfg["text_encoder"].get("model_path"), str(expected))
+                self.assertEqual(load_yaml(run_path)["text_encoder"]["model_path"], str(expected))
 
     def test_dry_run_writes_config_without_launching(self):
         args = self.args("--image", str(self.image), "--prompt", "a test", "--dry-run")

@@ -108,6 +108,7 @@ def effective_config(args: argparse.Namespace) -> dict:
     )
 
     text = cfg.setdefault("text_encoder", {})
+    text["model_path"] = absolute(text.get("model_path") or Path(cfg["model_root"]) / "text_encoder")
     text.setdefault("engine", "tp")
     text.setdefault("tp_size", args.encode_nproc)
     sample = cfg.setdefault("sample", {})
