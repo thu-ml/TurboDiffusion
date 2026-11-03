@@ -38,6 +38,7 @@ def main():
         save_adaln_bake(
             args.adaln_output, blocks, final, task="i2va", steps=5,
             video_shift=12, audio_shift=3, timesteps_per_step=schedule,
+            timestep_mlp_dtype=model.time_embedder.proj_in.weight.dtype,
         )
         model.time_embedder.cpu()
         del blocks, final

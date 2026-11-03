@@ -90,6 +90,7 @@ def save_adaln_bake(
     video_shift: float,
     audio_shift: float,
     timesteps_per_step: list[torch.Tensor],
+    timestep_mlp_dtype: torch.dtype | None = None,
 ) -> Path:
     """Store one stacked tensor per step; chunks are restored on load."""
     path = Path(path)
@@ -114,6 +115,8 @@ def save_adaln_bake(
         "final_expand": FINAL_EXPAND,
         "timesteps": [[float(v) for v in ts.tolist()] for ts in timesteps_per_step],
     }
+    if timestep_mlp_dtype is not None:
+        meta["timestep_mlp_dtype"] = str(timestep_mlp_dtype).removeprefix("torch.")
     save_file(tensors, str(path), metadata={"h3_adaln_bake": json.dumps(meta)})
     path.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return path

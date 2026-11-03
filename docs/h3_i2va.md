@@ -156,9 +156,28 @@ weights, but not the original many-step transformer:
 hf download liran12345/h3-turbo-diffusion \
   --local-dir /models/h3-turbo-diffusion
 hf download MiniMaxAI/MiniMax-H3 \
-  --include 'FL2VA/text_encoder/*' 'FL2VA/processor/*' 'FL2VA/tokenizer/*' \
-            'FL2VA/video_vae/*' 'FL2VA/audio_vae/*' \
+  --include 'FL2VA/text_encoder/*' \
+  --include 'FL2VA/processor/*' \
+  --include 'FL2VA/tokenizer/*' \
+  --include 'FL2VA/video_vae/*' \
+  --include 'FL2VA/audio_vae/*' \
   --local-dir /models/MiniMax-H3
+```
+
+Each download pattern has its own `--include`, as required by current `hf` CLI
+versions.
+
+The published AdaLN table was refreshed on 2026-11-03 using the original FP32
+timestep MLP. Its JSON and embedded metadata record
+`"timestep_mlp_dtype": "float32"`; table tensors remain BF16. For the published
+schedule, use this table directly without regenerating it. If you downloaded
+the older 2026-10-29 table, refresh only the two AdaLN files:
+
+```bash
+hf download liran12345/h3-turbo-diffusion \
+  --include 'adaln/adaln_i2va_s5_v12_a3.safetensors' \
+  --include 'adaln/adaln_i2va_s5_v12_a3.json' \
+  --local-dir /models/h3-turbo-diffusion
 ```
 
 The VAEs use the public Python modules supplied with those weights.
@@ -179,18 +198,22 @@ Run from the TurboDiffusion checkout after building its CUDA extension:
 ```bash
 CUDA_VISIBLE_DEVICES=0 python -m turbodiffusion.inference.export_h3_w8a8 \
   --model-path /models/h3-turbo-diffusion/transformer \
-  --output /models/h3-turbo-diffusion/model_w8a8.safetensors \
-  --adaln-output /models/h3-turbo-diffusion/adaln/adaln_i2va_s5_v12_a3.safetensors
+  --output /models/h3-turbo-diffusion/model_w8a8.safetensors
 ```
 
 The exporter wraps only main-block QKV, attention output and MLP projections.
 It does not modify the source checkpoint or the CUDA kernels.
-The optional `--adaln-output` regenerates the table for
+To regenerate the table instead of reusing the published one, append
+`--adaln-output /models/h3-turbo-diffusion/adaln/adaln_i2va_s5_v12_a3.safetensors`.
+This regenerates the table for
 `i2va / steps=5 / video_shift=12 / audio_shift=3`, preserving the source FP32
 timestep MLP and writing its companion `.json`. Omit it to reuse an existing
 matching table. W8A8 and RoPE changes alone do not require re-baking AdaLN,
 but tables created by an older exporter using a BF16 timestep MLP should be
 regenerated to reproduce the original mixed-precision computation.
+New exports record `timestep_mlp_dtype` in both the `.json` and safetensors
+metadata. The table itself remains BF16; its storage dtype does not indicate
+the timestep MLP's computation dtype.
 
 Re-export INT8 checkpoints created before the FP32-preservation fix.
 The loader rejects reduced-precision RoPE/input/output/timestep tensors

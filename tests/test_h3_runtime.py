@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 import torch
+from safetensors import safe_open
 from safetensors.torch import save_file
 
 from turbodiffusion.h3.components import load_vae_module
@@ -268,13 +269,24 @@ class H3RuntimeTest(unittest.TestCase):
         save_adaln_bake(
             path, blocks, final, task="i2va", steps=5, video_shift=12, audio_shift=3,
             timesteps_per_step=schedule,
+            timestep_mlp_dtype=model.time_embedder.proj_in.weight.dtype,
         )
         _, loaded_blocks, loaded_final, meta = load_adaln_bake(path, device="cpu")
         self.assertEqual(meta["n_blocks"], 2)
+        self.assertEqual(meta["timestep_mlp_dtype"], "float32")
+        with safe_open(str(path), framework="pt", device="cpu") as handle:
+            self.assertEqual(json.loads(handle.metadata()["h3_adaln_bake"]), meta)
         for expected, actual in zip(blocks[0][0], loaded_blocks[0][0]):
             torch.testing.assert_close(expected, actual)
         for expected, actual in zip(final[-1], loaded_final[-1]):
             torch.testing.assert_close(expected, actual)
+        legacy = self.root / "legacy_adaln.safetensors"
+        save_adaln_bake(
+            legacy, blocks, final, task="i2va", steps=5, video_shift=12, audio_shift=3,
+            timesteps_per_step=schedule,
+        )
+        _, _, _, legacy_meta = load_adaln_bake(legacy, device="cpu")
+        self.assertNotIn("timestep_mlp_dtype", legacy_meta)
 
     def test_cache_warmup_and_consecutive_hit_limit(self):
         cfg = DBCacheConfig(enabled=True, Fn_compute_blocks=1, Bn_compute_blocks=0,
