@@ -21,6 +21,8 @@ no cache speedup or quality-parity claim is made for the default profile.
   video/audio decoding and MP4 export. The video VAE uses the same native
   `Int8Linear` for 144 attention/FFN projections in its 36 ViT decoder blocks.
 - `turbodiffusion/inference/export_h3_w8a8.py`: full-model W8A8 export.
+- `turbodiffusion/inference/download_h3.py`: revision-pinned Python downloads
+  and DMD manifest size/SHA256 verification.
 - `turbodiffusion/h3/nccl.py`: loaded-library verification and an eight-rank
   asynchronous INT8/FP32 all-to-all stress test with pinned H2D overlap.
 
@@ -82,12 +84,24 @@ or newer and expose only the intended build GPU architecture:
 git clone https://github.com/thu-ml/SpargeAttn.git
 git -C SpargeAttn checkout ae5b629ebb41e41f86b3ea2ab5a3283f13ac151a
 CUDA_VISIBLE_DEVICES=0 env -u TORCH_CUDA_ARCH_LIST \
-  pip install ./SpargeAttn --no-build-isolation --no-deps
+  pip install ./SpargeAttn --no-build-isolation --no-deps --force-reinstall --no-cache-dir
 ```
 
 This revision's explicit `TORCH_CUDA_ARCH_LIST` allowlist predates SM120,
 so the command lets its build script detect the visible GPU instead.
 No SpargeAttn source patch is required for this adapter.
+After changing PyTorch, check that imports select the newly rebuilt binaries,
+not a copied wheel or another checkout on `PYTHONPATH`:
+
+```bash
+python - <<'PY'
+import torch
+from spas_sage_attn import _qattn, _fused
+print("torch:", torch.__version__)
+print("Sparge QK:", _qattn.__file__)
+print("Sparge fused:", _fused.__file__)
+PY
+```
 
 `turbodiffusion/h3/attention.py` uses H3-scoped pooled top-k block
 selection, then makes prefix/suffix query rows and key columns dense for
@@ -153,19 +167,20 @@ Download their complete directories, including VAE Python modules and `source/`
 weights, but not the original many-step transformer:
 
 ```bash
-hf download liran12345/h3-turbo-diffusion \
-  --local-dir /models/h3-turbo-diffusion
-hf download MiniMaxAI/MiniMax-H3 \
-  --include 'FL2VA/text_encoder/*' \
-  --include 'FL2VA/processor/*' \
-  --include 'FL2VA/tokenizer/*' \
-  --include 'FL2VA/video_vae/*' \
-  --include 'FL2VA/audio_vae/*' \
-  --local-dir /models/MiniMax-H3
+python -m turbodiffusion.inference.download_h3 \
+  --dit-dir /models/h3-turbo-diffusion \
+  --components-dir /models/MiniMax-H3
 ```
 
-Each download pattern has its own `--include`, as required by current `hf` CLI
-versions.
+The bundled downloader uses `snapshot_download(allow_patterns=[...])`,
+compatible with both Hugging Face Hub 0.36.x in the H3 environment and 2.x.
+Their CLI multi-pattern `--include` syntax is incompatible; do not upgrade the
+H3 environment's Hub package independently of Transformers.
+The DMD release is pinned to `a6369c0b0ef1d6f49c7889cca3b94c678ae7e634`;
+official components are pinned to `42ed227ee7df40d41602854ae760620d6eb651fe`.
+Every selected DMD file is checked against the pinned manifest's size and
+SHA256 before the command succeeds. This verifies publisher-release
+consistency, not organization ownership or a cryptographic signature.
 
 The published AdaLN table was refreshed on 2026-11-03 using the original FP32
 timestep MLP. Its JSON and embedded metadata record
@@ -174,11 +189,16 @@ schedule, use this table directly without regenerating it. If you downloaded
 the older 2026-10-29 table, refresh only the two AdaLN files:
 
 ```bash
-hf download liran12345/h3-turbo-diffusion \
-  --include 'adaln/adaln_i2va_s5_v12_a3.safetensors' \
-  --include 'adaln/adaln_i2va_s5_v12_a3.json' \
-  --local-dir /models/h3-turbo-diffusion
+python -m turbodiffusion.inference.download_h3 \
+  --dit-dir /models/h3-turbo-diffusion --adaln-only
 ```
+
+The refresh downloads the safetensors, JSON and manifest from one pinned
+snapshot, and verifies both AdaLN files. The loader also checks embedded
+metadata against the JSON before loading tensors; a mixed old/new pair raises
+an error rather than reporting an incorrect timestep precision.
+Obsolete HF `configs/` files have been removed. Downloads do not delete old
+local copies; use this repository's `configs/h3_i2va_w8a8.yaml`.
 
 The VAEs use the public Python modules supplied with those weights.
 `--trust-model-code` explicitly permits loading that code; review its source
@@ -187,6 +207,9 @@ not a private checkout. Third-party attribution is in `turbodiffusion/h3/NOTICE`
 Model weights remain subject to the
 [MiniMax H3 Community License Agreement](https://huggingface.co/liran12345/h3-turbo-diffusion/blob/main/LICENSE),
 not this repository's code license.
+The license excludes the United States, European Union, United Kingdom and
+Republic of Korea from its applicable territory; review the full terms and
+obtain any required permissions before downloading or using the weights.
 The current checkpoint is hosted by its publisher's personal account;
 an organization-hosted release is not yet available. This PR does not
 transfer weight ownership or broaden redistribution rights.
@@ -280,13 +303,17 @@ python -m torch.distributed.run --standalone --nproc_per_node=8 \
   tests/h3_sequence_parallel_check.py
 ```
 
-All 41 H3 tests passed with real native W8A8/public SpargeAttn CUDA coverage.
+All 49 H3 tests passed with real native W8A8/public SpargeAttn CUDA coverage.
 The isolated PyTorch 2.11 validation uses the official wheel NCCL and rebuilt
 native W8A8/public SpargeAttn extensions. Tests cover local dense refinement of
 long prompts, FP32 preservation and legacy-checkpoint rejection, padding
 exclusion, rank-zero-only video conversion, and the actual NCCL version API.
 On 2026-11-03, the 513-token SP8/local regression passed for both attention
-backends. Fresh four-rank encoding followed by default eight-rank sampling and
+backends while retaining FP32 input/output/timestep projections and empty
+rank-zero video/audio shards. Exact SP8 prediction-gather checks cover
+FP32/BF16/FP16 and five empty/nonempty rank layouts. Tests also cover
+AdaLN metadata mismatch rejection, download checksums and EXIF orientation.
+Fresh four-rank encoding followed by default eight-rank sampling and
 decoding also passed; the optional cache profile passed sample/decode using
 that same freshly encoded conditioning. Both exported 124-frame audio/video
 MP4s. This is a pipeline smoke test, not a quality or latency comparison.

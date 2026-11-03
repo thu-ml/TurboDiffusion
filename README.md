@@ -95,6 +95,9 @@ and matching AdaLN table from
 then export W8A8 locally from the full-parameter DMD checkpoint. See
 [H3 inference](docs/h3_i2va.md) for download/export commands, original FL2VA
 component requirements and the `scripts/inference_h3_i2va.sh` entry point.
+The bundled downloader pins HF revisions and verifies the DMD manifest.
+The model license excludes the United States, European Union, United Kingdom
+and Republic of Korea; review its full terms before downloading or using H3.
 
 ### Wan
 For GPUs with more than 40GB of GPU memory, **e.g., H100, please use the unquantized checkpoints (without `-quant`) and remove `--quant_linear` from the command. For RTX 5090, RTX 4090, or similar GPUs, please use the quantized checkpoints (with `-quant`) and add `--quant_linear` in the command.)**

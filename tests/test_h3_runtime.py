@@ -21,7 +21,8 @@ from turbodiffusion.h3.dit.config import H3DiTConfig
 from turbodiffusion.h3.dit.dbcache import DBCacheConfig, DBCacheState
 from turbodiffusion.h3.dit.model import MiniMaxH3Attention, MiniMaxH3DiTModel
 from turbodiffusion.h3.dit.pack import build_i2va_packed
-from turbodiffusion.h3.dit.processor import H3DiTProcessor, _shifted_sigma_schedule
+from turbodiffusion.h3.dit.processor import H3DiTProcessor, _gather_token_preds, _shifted_sigma_schedule
+from turbodiffusion.h3.parallel import ParallelState
 from turbodiffusion.h3.dit.turbo_int8 import FORMAT, apply_turbo_int8, is_mlp_alias_key, load_fl2va_turbo_int8
 from turbodiffusion.h3.dit.weight_loader import (
     FP32_PROJECTIONS, _diffusers_key, load_fl2va_streaming, materialize_cpu_model,
@@ -287,6 +288,50 @@ class H3RuntimeTest(unittest.TestCase):
         )
         _, _, _, legacy_meta = load_adaln_bake(legacy, device="cpu")
         self.assertNotIn("timestep_mlp_dtype", legacy_meta)
+
+    def test_adaln_rejects_mismatched_sidecar_before_loading_tensors(self):
+        schedule = schedule_timesteps("i2va", steps=5, video_shift=12, audio_shift=3)
+        blocks, final = self.model().bake_and_drop_adaln(
+            schedule, device=torch.device("cpu"), dtype=torch.float32
+        )
+        path = self.root / "adaln.safetensors"
+        save_adaln_bake(
+            path, blocks, final, task="i2va", steps=5, video_shift=12, audio_shift=3,
+            timesteps_per_step=schedule,
+        )
+        original = json.loads(path.with_suffix(".json").read_text())
+        for field, value in (("timestep_mlp_dtype", "float32"), ("steps", 6), ("task", "other")):
+            with self.subTest(field=field):
+                sidecar = {**original, field: value}
+                path.with_suffix(".json").write_text(json.dumps(sidecar))
+                with patch("turbodiffusion.h3.dit.adaln_bake.load_file") as load:
+                    with self.assertRaisesRegex(ValueError, "both files together"):
+                        load_adaln_bake(path, device="cpu")
+                    load.assert_not_called()
+        path.with_suffix(".json").write_text(json.dumps(original))
+        raw = {"block.0": torch.zeros(1)}
+        save_file(raw, str(path))
+        with self.assertRaisesRegex(ValueError, "embedded metadata"):
+            load_adaln_bake(path, device="cpu")
+
+    def test_empty_prediction_shards_retain_collective_dtype(self):
+        mask = torch.tensor([False] * 4 + [True, False, True, False])
+        state = ParallelState(rank=0, world_size=2, ulysses_degree=2, group=object())
+        for dtype in (torch.float32, torch.bfloat16, torch.float16):
+            with self.subTest(dtype=dtype):
+                values = torch.arange(8, dtype=dtype).reshape(4, 2)
+
+                def gather(parts, shard, **kwargs):
+                    self.assertEqual(shard.dtype, dtype)
+                    self.assertEqual(shard.shape, (4, 2))
+                    parts[0].copy_(shard)
+                    parts[1].copy_(values)
+
+                with patch("turbodiffusion.h3.parallel._STATE", state), \
+                     patch("torch.distributed.all_gather", side_effect=gather):
+                    result = _gather_token_preds(torch.empty(0, 2, dtype=dtype), mask, feat=2)
+                self.assertEqual(result.dtype, dtype)
+                torch.testing.assert_close(result, values[mask[4:]], rtol=0, atol=0)
 
     def test_cache_warmup_and_consecutive_hit_limit(self):
         cfg = DBCacheConfig(enabled=True, Fn_compute_blocks=1, Bn_compute_blocks=0,

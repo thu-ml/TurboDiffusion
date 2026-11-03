@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 import torch
+from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
 from turbodiffusion.h3.dit.pack import H3_IMGVID_COND_TIMESTEP
@@ -138,6 +139,14 @@ def load_adaln_bake(
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     if meta.get("format") != BAKE_FORMAT:
         raise ValueError(f"unexpected adaln bake format {meta.get('format')!r}")
+
+    with safe_open(str(path), framework="pt", device="cpu") as handle:
+        embedded = (handle.metadata() or {}).get("h3_adaln_bake")
+    if embedded is None or json.loads(embedded) != meta:
+        raise ValueError(
+            "AdaLN embedded metadata does not match its JSON sidecar; "
+            "download or regenerate both files together from the same revision"
+        )
 
     raw = load_file(str(path), device=str(device))
     n_steps = int(meta["n_steps"])

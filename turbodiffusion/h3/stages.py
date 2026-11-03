@@ -12,7 +12,7 @@ from .utils import load_yaml
 
 
 def encode(cfg):
-    from PIL import Image
+    from PIL import Image, ImageOps
 
     from .resolution import aspect_string, delivery_size, model_canvas, parse_aspect
     from .textencoder.processor import encode_prompt
@@ -24,7 +24,7 @@ def encode(cfg):
     if dist.get_rank() == 0:
         torch.save({"prompt_embeds": embeds}, output / "prompt_embeds.pt")
     with Image.open(sample["image"]) as image:
-        source_wh = image.size
+        source_wh = ImageOps.exif_transpose(image).size
     aspect = sample.get("encode_aspect_ratio") or aspect_string(*source_wh)
     ratio = parse_aspect(aspect)
     short = int(sample.get("short_edge", 768))

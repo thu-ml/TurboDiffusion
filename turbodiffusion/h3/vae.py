@@ -153,11 +153,12 @@ class H3VAEProcessor:
 
     @torch.no_grad()
     def encode_image(self, path, height, width):
-        from PIL import Image
+        from PIL import Image, ImageOps
 
         model = self._load_encoder()
         self._configure_tiles(model, height, width, decode=False)
         with Image.open(path) as image:
+            image = ImageOps.exif_transpose(image)
             pixels = np.asarray(image.convert("RGB").resize((width, height), Image.Resampling.LANCZOS))
         with torch.random.fork_rng(devices=[self.device.index]):
             torch.manual_seed(42)

@@ -597,7 +597,7 @@ def _gather_token_preds(
     chunk = s // sp
     local_mask = full_mask[state.sp_rank * chunk : (state.sp_rank + 1) * chunk]
     n_local = int(local_mask.sum().item())
-    dtype = local.dtype if local.numel() > 0 else torch.bfloat16
+    dtype = local.dtype
     shard = torch.zeros(chunk, feat, device=full_mask.device, dtype=dtype)
     if n_local > 0:
         shard[local_mask] = local.reshape(n_local, feat)
