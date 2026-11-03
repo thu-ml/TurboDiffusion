@@ -1,10 +1,9 @@
-# H3 FL2VA: DMD (5 sigma points / 4 updates), native W8A8, conservative DBCache.
+# H3 FL2VA: DMD (5 sigma points / 4 updates), native W8A8, no cache by default.
 # Full DMD + AdaLN: https://huggingface.co/liran12345/h3-turbo-diffusion
 # Export W8A8 locally; see docs/h3_i2va.md for download and checkpoint paths.
 # Replace checkpoint paths with CLI flags.
 model_root: checkpoints/MiniMax-H3/FL2VA
 text_encoder:
-  backend: file
   engine: tp
   tp_size: 4
   layer_idx: 50
@@ -29,7 +28,7 @@ dit:
   video_shift: 12.0
   audio_shift: 3.0
   dbcache:
-    enabled: true
+    enabled: false
     probe_only: false
     Fn_compute_blocks: 8
     Bn_compute_blocks: 4

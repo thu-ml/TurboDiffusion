@@ -5,7 +5,7 @@ from __future__ import annotations
 The default path is native NCCL ``all_to_all_single``. Set ``H3_USE_NCCL_A2A=0``
 to use ``all_gather`` (+ local slice) as a compatibility fallback with higher
 communication cost. NCCL is not bundled here; see ``docs/h3_i2va.md`` for the
-RTX 5090 source-build procedure and runtime library verification.
+tested RTX 5090 PyTorch/NCCL combination and runtime library verification.
 
 Two knobs cut the wire cost, both off unless enabled in ``dit.*`` config:
 

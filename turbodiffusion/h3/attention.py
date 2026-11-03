@@ -49,7 +49,7 @@ def attention_fn(
         if q.shape[-2] < 128:
             out = F.scaled_dot_product_attention(q, k, v, scale=scale, is_causal=False)
         else:
-            from turbodiffusion.SLA.utils import get_block_map
+            from turbodiffusion.h3.pooling import get_block_map
 
             sm90 = torch.cuda.get_device_capability(q.device) == (9, 0)
             block_q, block_k = (64, 128) if sm90 else (128, 64)

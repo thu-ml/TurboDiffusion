@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the full H3 DMD model with TurboDiffusion W8A8 and conservative DBCache by default.
+"""Run the full H3 DMD model with TurboDiffusion W8A8 and optional conservative DBCache.
 
 The bundled turbodiffusion.h3 package implements conditioning, sampling,
 offload and decoding. W8A8 uses this repository's existing CUDA operators.
@@ -41,8 +41,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="video decoder block precision (default: native W8A8)")
     ap.add_argument("--trust-model-code", action="store_true",
                     help="allow the public VAE Python modules in the downloaded FL2VA model")
-    ap.add_argument("--profile", choices=("fullopt", "fullopt-dbcache"), default="fullopt-dbcache",
-                    help="default: fullopt-dbcache; use fullopt to disable DBCache")
+    ap.add_argument("--profile", choices=("fullopt", "fullopt-dbcache"), default="fullopt",
+                    help="default: fullopt; use fullopt-dbcache to enable conservative DBCache")
     ap.add_argument("--image", type=Path, help="first frame; required when encoding")
     ap.add_argument("--prompt", help="H3 prompt; required when encoding")
     ap.add_argument("--prompt-embeds", type=Path, help="reuse an existing encoded prompt")
@@ -110,8 +110,6 @@ def effective_config(args: argparse.Namespace) -> dict:
     text = cfg.setdefault("text_encoder", {})
     text.setdefault("engine", "tp")
     text.setdefault("tp_size", args.encode_nproc)
-    text["backend"] = "file"
-    text["embeds_path"] = str(args.output_dir.resolve() / "prompt_embeds.pt")
     sample = cfg.setdefault("sample", {})
     sample["task"] = "i2va"
     sample["encode_aspect_ratio"] = args.aspect_ratio
@@ -161,7 +159,7 @@ def validate_inputs(args: argparse.Namespace, cfg: dict) -> None:
             raise ValueError("pass an existing --image for first-frame encoding")
         if not (args.prompt or cfg["sample"].get("prompt")):
             raise ValueError("pass --prompt for first-frame encoding")
-    if (args.output_dir / "latents.pt").exists() or (args.output_dir / "t2va.mp4").exists():
+    if any((args.output_dir / name).exists() for name in ("latents.pt", "i2va.mp4", "t2va.mp4")):
         raise FileExistsError(f"output already contains a sample: {args.output_dir}")
 
 
@@ -209,7 +207,7 @@ def main(argv: list[str] | None = None) -> None:
         if not args.dry_run:
             subprocess.run(command, cwd=ROOT, env=env, check=True)
     if not args.dry_run:
-        output = args.output_dir / "t2va.mp4"
+        output = args.output_dir / "i2va.mp4"
         if not output.is_file():
             raise RuntimeError(f"H3 decode did not produce {output}")
         print(f"[h3] ready -> {output}", flush=True)

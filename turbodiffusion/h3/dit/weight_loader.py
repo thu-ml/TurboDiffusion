@@ -11,6 +11,21 @@ from safetensors import safe_open
 from turbodiffusion.h3.dit.model import MiniMaxH3DiTModel, _reorder_grouped_qkv_to_qkv
 
 
+FP32_PROJECTIONS = (
+    "video_patch_proj.", "audio_patch_proj.", "time_embedder.",
+    "final_layer.video_out.", "final_layer.audio_out.",
+)
+
+
+def materialize_cpu_model(model: MiniMaxH3DiTModel, dtype=torch.bfloat16) -> None:
+    """Allocate the BF16 block stack and original FP32 projections on CPU."""
+    model.to_empty(device="cpu")
+    for name, parameter in model.named_parameters():
+        target_dtype = torch.float32 if name.startswith(FP32_PROJECTIONS) else dtype
+        parameter.data = torch.empty(parameter.shape, dtype=target_dtype)
+    # Buffers retain their declared dtype, particularly FP32 rope.inv_freq.
+
+
 def _diffusers_key(key: str) -> tuple[str, str | None]:
     """Return runtime parameter and optional Q/K/V part for a Diffusers shard."""
     for source, target in (
@@ -98,11 +113,18 @@ def load_fl2va_streaming(model: MiniMaxH3DiTModel, model_dir: Path, *, rank: int
                     param = named[target]
                     if param.shape != tensor.shape:
                         raise RuntimeError(f"shape mismatch {target}: {tuple(param.shape)} vs {tuple(tensor.shape)}")
-                    param.data.copy_(tensor.to(dtype=param.dtype))
+                    if target.startswith(FP32_PROJECTIONS):
+                        if tensor.dtype != torch.float32:
+                            raise ValueError(f"source {target} must retain its original FP32 precision")
+                        param.data = tensor.to(device=param.device)
+                    else:
+                        param.data.copy_(tensor.to(dtype=param.dtype))
                     missing.discard(target)
                     loaded += 1
                 elif target in named_buf:
                     buf = named_buf[target]
+                    if target == "rope.inv_freq" and tensor.dtype != torch.float32:
+                        raise ValueError("source rope.inv_freq must be FP32; use the original checkpoint")
                     buf.data.copy_(tensor.to(dtype=buf.dtype))
                     missing.discard(target)
                     loaded += 1

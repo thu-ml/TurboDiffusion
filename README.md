@@ -80,11 +80,14 @@ pip install git+https://github.com/thu-ml/SpargeAttn.git --no-build-isolation
 ```
 
 
-## H3 FL2VA Inference
+## Inference
+
+### H3 FL2VA
 
 H3 uses the same TurboDiffusion W8A8 Linear kernels for DiT and video VAE decoder
-blocks, with its own 4-update DMD sampler, Sparge attention and conservative
-DBCache enabled by default (`--profile fullopt` disables DBCache). The H3 model,
+blocks, with its own 4-update DMD sampler and public SpargeAttn.
+The default `fullopt` profile has no DBCache; `--profile fullopt-dbcache`
+opts into conservative caching. The H3 model,
 sampler, multi-GPU runtime and W8A8 exporter are included in `turbodiffusion/h3`
 and `turbodiffusion/inference`. Download the full BF16 DMD transformer
 and matching AdaLN table from
@@ -93,7 +96,7 @@ then export W8A8 locally from the full-parameter DMD checkpoint. See
 [H3 inference](docs/h3_i2va.md) for download/export commands, original FL2VA
 component requirements and the `scripts/inference_h3_i2va.sh` entry point.
 
-## Inference
+### Wan
 For GPUs with more than 40GB of GPU memory, **e.g., H100, please use the unquantized checkpoints (without `-quant`) and remove `--quant_linear` from the command. For RTX 5090, RTX 4090, or similar GPUs, please use the quantized checkpoints (with `-quant`) and add `--quant_linear` in the command.)**
 
 1.  Download the VAE (**applicable for both Wan2.1 and Wan2.2**) and umT5 text encoder checkpoints:

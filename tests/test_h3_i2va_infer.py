@@ -48,8 +48,8 @@ class H3InferenceTest(unittest.TestCase):
         self.assertEqual(config["dit"]["steps"], 5)
         self.assertEqual(config["dit"]["turbo_int8_path"], str(self.assets / "model.safetensors"))
         self.assertEqual(config["sample"]["seed"], 73)
-        self.assertEqual(args.profile, "fullopt-dbcache")
-        self.assertEqual(config["dit"]["dbcache"], infer.CONSERVATIVE_CACHE)
+        self.assertEqual(args.profile, "fullopt")
+        self.assertEqual(config["dit"]["dbcache"], {"enabled": False})
         self.assertEqual(config["vae"]["video_decoder_precision"], "w8a8")
         commands = infer.stage_commands(args, self.root / "run.yaml", config)
         self.assertEqual(len(commands), 3)
@@ -75,9 +75,10 @@ class H3InferenceTest(unittest.TestCase):
         self.assertTrue(config["dit"]["bake_adaln"])
         self.assertEqual(config["vae"]["video_decoder_precision"], "w8a8")
 
-    def test_shipped_config_matches_conservative_defaults(self):
+    def test_shipped_config_disables_cache_by_default(self):
         config = yaml.safe_load(infer.DEFAULT_CONFIG.read_text())
-        self.assertEqual(config["dit"]["dbcache"], infer.CONSERVATIVE_CACHE)
+        self.assertEqual(config["dit"]["dbcache"], {**infer.CONSERVATIVE_CACHE, "enabled": False})
+        self.assertNotIn("backend", config["text_encoder"])
 
     def test_prepared_inputs_and_config_origin(self):
         config_dir = self.root / "config"
@@ -129,7 +130,7 @@ class H3InferenceTest(unittest.TestCase):
             infer.main()
         run.assert_not_called()
         cfg = yaml.safe_load((self.root / "output" / "run.yaml").read_text())
-        self.assertEqual(cfg["dit"]["dbcache"], infer.CONSERVATIVE_CACHE)
+        self.assertEqual(cfg["dit"]["dbcache"], {"enabled": False})
 
     def test_model_code_requires_explicit_consent(self):
         args = self.args("--image", str(self.image), "--prompt", "test")

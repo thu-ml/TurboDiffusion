@@ -18,11 +18,13 @@ from turbodiffusion.h3.components import load_vae_module
 from turbodiffusion.h3.dit.adaln_bake import load_adaln_bake, save_adaln_bake, schedule_timesteps
 from turbodiffusion.h3.dit.config import H3DiTConfig
 from turbodiffusion.h3.dit.dbcache import DBCacheConfig, DBCacheState
-from turbodiffusion.h3.dit.model import MiniMaxH3DiTModel
+from turbodiffusion.h3.dit.model import MiniMaxH3Attention, MiniMaxH3DiTModel
 from turbodiffusion.h3.dit.pack import build_i2va_packed
 from turbodiffusion.h3.dit.processor import H3DiTProcessor, _shifted_sigma_schedule
 from turbodiffusion.h3.dit.turbo_int8 import FORMAT, apply_turbo_int8, is_mlp_alias_key, load_fl2va_turbo_int8
-from turbodiffusion.h3.dit.weight_loader import _diffusers_key, load_fl2va_streaming
+from turbodiffusion.h3.dit.weight_loader import (
+    FP32_PROJECTIONS, _diffusers_key, load_fl2va_streaming, materialize_cpu_model,
+)
 from turbodiffusion.h3.vae import apply_video_vae_w8a8, normalize_latents, pixels_to_uint8
 
 
@@ -134,6 +136,104 @@ class H3RuntimeTest(unittest.TestCase):
                 self.assertEqual(block.attn.sparge_attn_pre_sink_length, expected)
                 self.assertEqual(block.attn.sparge_attn_post_sink_length, 7)
                 self.assertEqual(block.attn.sparge_attn_topk, 0.25)
+            self.assertEqual(model.token_refiner.blocks[0].attn.sparge_attn_pre_sink_length, 0)
+
+    def test_long_prompt_refiner_is_dense_and_never_communicates(self):
+        model = MiniMaxH3DiTModel(self.arch, attn_backend="sparge_attn").eval()
+        model.configure_sparge(topk=0.25, pre_sink_length=129)
+        refiner = model.token_refiner
+        self.assertEqual(refiner.blocks[0].attn.attn_backend, "sdpa")
+        self.assertFalse(refiner.blocks[0].attn.sequence_parallel)
+        text = torch.randn(513, self.arch.hidden_size)
+        with patch("turbodiffusion.h3.dit.model.ulysses_pre_attn", side_effect=AssertionError), patch(
+            "turbodiffusion.h3.dit.model.ulysses_pre_attn_launch", side_effect=AssertionError
+        ), patch("turbodiffusion.h3.dit.model.ulysses_post_attn", side_effect=AssertionError), patch(
+            "turbodiffusion.h3.dit.model.get_parallel_state",
+            return_value=types.SimpleNamespace(use_async_comm=True),
+        ):
+            output = refiner(text)
+        block = refiner.blocks[0]
+        normalized = block.norm1(text)
+        q, k, v = block.attn.qkv_proj(normalized).chunk(3, -1)
+        q, k, v = (tensor.view(513, 1, 32) for tensor in (q, k, v))
+        attention = torch.nn.functional.scaled_dot_product_attention(
+            block.attn.q_norm(q).transpose(0, 1),
+            block.attn.k_norm(k).transpose(0, 1), v.transpose(0, 1),
+        ).transpose(0, 1).reshape(513, 32)
+        expected = text + block.attn.out_proj(attention)
+        expected = refiner.final_norm(expected + block.mlp(block.norm2(expected)))
+        torch.testing.assert_close(output, expected)
+
+    def test_padding_does_not_change_valid_attention_outputs(self):
+        attention = MiniMaxH3Attention(self.arch).eval()
+        x = torch.randn(64, 32)
+        expected = attention(x[:17], cos=None, sin=None)
+        actual = attention(x, cos=None, sin=None, sequence_length=17)
+        torch.testing.assert_close(actual[:17], expected)
+        torch.testing.assert_close(actual[17:], torch.zeros_like(actual[17:]))
+
+    def test_rope_preserves_fp32_values_across_casts_and_meta_materialization(self):
+        model = self.model()
+        frequencies = torch.tensor([1., 0.1234567, 0.01234567, 0.001234567])
+        model.rope.inv_freq.copy_(frequencies)
+        model.bfloat16()
+        self.assertEqual(model.rope.inv_freq.dtype, torch.float32)
+        torch.testing.assert_close(model.rope.inv_freq, frequencies, rtol=0, atol=0)
+        positions = torch.tensor([[1024., 500., 400.]])
+        expected_half = (positions.unsqueeze(-1) * frequencies).flatten(1)
+        torch.testing.assert_close(
+            model.rope(positions), torch.cat([expected_half, expected_half], -1), rtol=0, atol=0
+        )
+        with torch.device("meta"):
+            empty = MiniMaxH3DiTModel(self.arch)
+        materialize_cpu_model(empty)
+        self.assertFalse(empty.rope.inv_freq.is_meta)
+        self.assertEqual(empty.rope.inv_freq.dtype, torch.float32)
+
+    def test_streaming_loader_preserves_original_mixed_precision(self):
+        original = self.model().bfloat16()
+        for name in ("video_patch_proj", "audio_patch_proj", "time_embedder",
+                     "final_layer.video_out", "final_layer.audio_out"):
+            original.get_submodule(name).float()
+        tensors = {name: tensor.contiguous().clone() for name, tensor in original.state_dict().items()}
+        filename = "model.safetensors"
+        save_file(tensors, str(self.root / filename))
+        (self.root / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {key: filename for key in tensors}})
+        )
+        with torch.device("meta"):
+            restored = MiniMaxH3DiTModel(self.arch)
+        materialize_cpu_model(restored)
+        _, missing = load_fl2va_streaming(restored, self.root)
+        self.assertEqual(missing, 0)
+        for name, parameter in restored.named_parameters():
+            dtype = torch.float32 if name.startswith(FP32_PROJECTIONS) else torch.bfloat16
+            self.assertEqual(parameter.dtype, dtype, name)
+            if dtype == torch.float32:
+                torch.testing.assert_close(parameter, tensors[name], rtol=0, atol=0)
+        torch.testing.assert_close(restored.rope.inv_freq, original.rope.inv_freq, rtol=0, atol=0)
+
+    def test_legacy_w8a8_fp32_loss_requires_reexport(self):
+        model = self.model()
+        tensors = {name: tensor.contiguous().clone() for name, tensor in model.state_dict().items()}
+        tensors["rope.inv_freq"] = tensors["rope.inv_freq"].bfloat16()
+        path = self.root / "legacy.safetensors"
+        save_file(tensors, str(path), metadata={"format": FORMAT})
+        with self.assertRaisesRegex(ValueError, "re-export"):
+            load_fl2va_turbo_int8(model, path)
+
+    def test_streaming_loader_rejects_rounded_fp32_source_projections(self):
+        model = self.model()
+        filename = "model.safetensors"
+        save_file(
+            {"video_patch_proj.weight": model.video_patch_proj.weight.bfloat16().contiguous()},
+            str(self.root / filename),
+        )
+        (self.root / "model.safetensors.index.json").write_text(json.dumps({
+            "weight_map": {"video_patch_proj.weight": filename},
+        }))
+        with self.assertRaisesRegex(ValueError, "original FP32"):
+            load_fl2va_streaming(model, self.root)
 
     def test_baked_adaln_matches_uncached_sampling(self):
         model = self.model()
@@ -316,6 +416,25 @@ class H3RuntimeTest(unittest.TestCase):
                     if variant != "empty":
                         self.assertIsInstance(model.decoder.transformer_blocks[0].ff.w1, torch.nn.Linear)
 
+    def test_nonzero_rank_does_not_copy_decoded_video_to_cpu(self):
+        from turbodiffusion.h3.vae import H3VAEProcessor
+
+        video = torch.nn.Module()
+        video.model = torch.nn.Module()
+        video.decode_base = lambda z: torch.zeros(1, 3, 1, 2, 2)
+        processor = H3VAEProcessor.__new__(H3VAEProcessor)
+        processor.video_module = types.SimpleNamespace(
+            MiniMaxH3VideoVAE=types.SimpleNamespace(from_pretrained=lambda path: video)
+        )
+        processor.video_path = self.root
+        processor.video_precision = "bf16"
+        processor.device = torch.device("cpu")
+        processor.rank = 1
+        processor.video_mean, processor.video_std = torch.zeros(3), torch.ones(3)
+        processor._configure_tiles = lambda *args, **kwargs: None
+        with patch("turbodiffusion.h3.vae.pixels_to_uint8", side_effect=AssertionError):
+            self.assertEqual(processor.decode(torch.zeros(1, 3, 1, 2, 2), None), (None, None))
+
     @unittest.skipUnless(torch.cuda.is_available() and importlib.util.find_spec("turbo_diffusion_ops"),
                          "requires the native TurboDiffusion CUDA extension")
     def test_video_vae_native_cuda_w8a8_accuracy_and_bias(self):
@@ -356,6 +475,9 @@ class H3RuntimeTest(unittest.TestCase):
             adaln_out_features=18 * 256, final_adaln_out_features=2 * 256,
         )
         model = MiniMaxH3DiTModel(arch, attn_backend="sdpa").bfloat16().eval()
+        for name in ("video_patch_proj", "audio_patch_proj", "time_embedder",
+                     "final_layer.video_out", "final_layer.audio_out"):
+            model.get_submodule(name).float()
         model.rope.inv_freq.fill_(0.01)
         self.assertEqual(apply_turbo_int8(model, quantize=True), 8)
         layer = model.blocks[0].attn.qkv_proj.to("cuda")

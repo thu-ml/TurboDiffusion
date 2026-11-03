@@ -10,6 +10,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-path", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--adaln-output", type=Path,
+                        help="optionally regenerate the four-update AdaLN table with FP32 time embeddings")
     args = parser.parse_args()
 
     import torch
@@ -18,20 +20,27 @@ def main():
     from turbodiffusion.h3.dit.config import H3DiTConfig
     from turbodiffusion.h3.dit.model import MiniMaxH3DiTModel
     from turbodiffusion.h3.dit.turbo_int8 import FORMAT, apply_turbo_int8, is_mlp_alias_key
-    from turbodiffusion.h3.dit.weight_loader import load_fl2va_streaming
+    from turbodiffusion.h3.dit.weight_loader import load_fl2va_streaming, materialize_cpu_model
 
     arch = H3DiTConfig.from_json(str(args.model_path / "config.json"))
     with torch.device("meta"):
         model = MiniMaxH3DiTModel(arch, attn_backend="sdpa")
-    model.to_empty(device="cpu")
-    for parameter in model.parameters():
-        parameter.data = torch.empty(parameter.shape, dtype=torch.bfloat16)
-    for buffer in model.buffers():
-        if buffer.is_floating_point():
-            buffer.data = torch.empty(buffer.shape, dtype=torch.bfloat16)
+    materialize_cpu_model(model)
     loaded, missing = load_fl2va_streaming(model, args.model_path)
     if missing:
         raise RuntimeError(f"incomplete source checkpoint: {missing} tensors missing")
+    if args.adaln_output:
+        from turbodiffusion.h3.dit.adaln_bake import save_adaln_bake, schedule_timesteps
+
+        schedule = schedule_timesteps("i2va", steps=5, video_shift=12, audio_shift=3)
+        model.time_embedder.cuda()
+        blocks, final = model.bake_and_drop_adaln(schedule, device=torch.device("cuda"))
+        save_adaln_bake(
+            args.adaln_output, blocks, final, task="i2va", steps=5,
+            video_shift=12, audio_shift=3, timesteps_per_step=schedule,
+        )
+        model.time_embedder.cpu()
+        del blocks, final
     projections = apply_turbo_int8(model, quantize=True)
     if projections != 4 * arch.num_layers:
         raise RuntimeError(f"unexpected number of quantized projections: {projections}")

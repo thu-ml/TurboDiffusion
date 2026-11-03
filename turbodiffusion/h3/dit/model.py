@@ -29,8 +29,7 @@ class _BlockCtx(NamedTuple):
     sin: torch.Tensor
     block_modulations: list[tuple[torch.Tensor, ...]] | None
     offloader: Any
-    offload_blocks: list[bool] | None
-    device: torch.device
+    sequence_length: int
 
 
 def _rms_norm(size: int, eps: float) -> nn.RMSNorm:
@@ -85,6 +84,16 @@ class MiniMaxH3Rope(nn.Module):
         super().__init__()
         self.register_buffer("inv_freq", torch.empty(inv_freq_len, dtype=torch.float32), persistent=True)
 
+    def _apply(self, fn, recurse=True):
+        frequencies = self.inv_freq
+        super()._apply(fn, recurse=recurse)
+        if frequencies.is_meta:
+            self.inv_freq = torch.empty_like(self.inv_freq, dtype=torch.float32)
+        else:
+            # Preserve the original values across model-wide BF16/device casts.
+            self.inv_freq = frequencies.to(device=self.inv_freq.device, dtype=torch.float32)
+        return self
+
     def forward(self, position_ids: torch.Tensor) -> torch.Tensor:
         """position_ids: [1, S, 3] or [S, 3] -> freqs [S, 96]."""
         if position_ids.dim() == 3:
@@ -115,19 +124,22 @@ class MiniMaxH3TimeEmbedder(nn.Module):
         # Official MiniMaxH3TimeEmbedder: embed raw timestep (1-σ), no ×1000
         args = t.float()[:, None] * freqs[None]
         t_freq = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-        # sinusoidal freqs stay fp32; cast to Linear weight dtype (bf16 in prod)
+        # The released timestep MLP and its sinusoidal input remain FP32.
         t_freq = t_freq.to(dtype=self.proj_in.weight.dtype)
         hidden = F.silu(self.proj_in(t_freq))
         return self.proj_out(hidden)
 
 
 class MiniMaxH3Attention(nn.Module):
-    def __init__(self, cfg: H3DiTConfig, *, attn_backend: str = "sdpa"):
+    def __init__(
+        self, cfg: H3DiTConfig, *, attn_backend: str = "sdpa", sequence_parallel: bool = True
+    ):
         super().__init__()
         self.num_heads = cfg.num_attention_heads
         self.head_dim = cfg.attention_head_dim
         self.inner_dim = self.num_heads * self.head_dim
         self.attn_backend = attn_backend
+        self.sequence_parallel = sequence_parallel
         self.sparge_attn_topk = 0.5
         self.sparge_attn_pre_sink_length = 0
         self.sparge_attn_post_sink_length = 0
@@ -155,6 +167,7 @@ class MiniMaxH3Attention(nn.Module):
         sin: torch.Tensor | None,
         use_rope: bool = True,
         offload_handle=None,
+        sequence_length: int | None = None,
     ) -> torch.Tensor:
         # x: [T_local, hidden] under Ulysses (full T if sp=1)
         t = x.shape[0]
@@ -170,11 +183,11 @@ class MiniMaxH3Attention(nn.Module):
             k = _apply_rope(k, cos, sin)
 
         # Ulysses: [T_local, H, D] -> [T, H_local, D] -> attn -> reverse
-        if get_parallel_state().use_async_comm:
+        if self.sequence_parallel and get_parallel_state().use_async_comm:
             # Q/K/V all-to-alls in flight together: each one's quantize/dequantize
             # runs on the SMs while its siblings occupy the link.
             q, k, v = ulysses_pre_attn_wait(ulysses_pre_attn_launch(q, k, v))
-        else:
+        elif self.sequence_parallel:
             q, k, v = ulysses_pre_attn(q, k, v)
         # Overlap next-block H2D with attention. Do not
         # hoist this above the all-to-all: without NVLink both ride PCIe and the
@@ -182,16 +195,20 @@ class MiniMaxH3Attention(nn.Module):
         if offload_handle is not None:
             offload_handle.record()
             offload_handle.run()
+        padded_length = q.shape[0]
+        if sequence_length is not None:
+            q, k, v = (tensor[:sequence_length] for tensor in (q, k, v))
         out = attention_fn(
-            q.unsqueeze(0),
-            k.unsqueeze(0),
-            v.unsqueeze(0),
+            q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0),
             backend=self.attn_backend,
             sparge_attn_topk=self.sparge_attn_topk,
             sparge_attn_pre_sink_length=self.sparge_attn_pre_sink_length,
             sparge_attn_post_sink_length=self.sparge_attn_post_sink_length,
         ).squeeze(0)
-        out = ulysses_post_attn(out)
+        if sequence_length is not None:
+            out = F.pad(out, (0, 0, 0, 0, 0, padded_length - sequence_length))
+        if self.sequence_parallel:
+            out = ulysses_post_attn(out)
 
         out = out.reshape(t, self.inner_dim)
         return self.out_proj(out)
@@ -227,10 +244,11 @@ class MiniMaxH3AdalnProj(nn.Module):
 
 
 class MiniMaxH3TokenRefinerBlock(nn.Module):
-    def __init__(self, cfg: H3DiTConfig, *, attn_backend: str):
+    def __init__(self, cfg: H3DiTConfig):
         super().__init__()
         self.norm1 = _rms_norm(cfg.hidden_size, cfg.norm_eps)
-        self.attn = MiniMaxH3Attention(cfg, attn_backend=attn_backend)
+        # Text is replicated and not yet sequence-sharded.
+        self.attn = MiniMaxH3Attention(cfg, attn_backend="sdpa", sequence_parallel=False)
         self.norm2 = _rms_norm(cfg.hidden_size, cfg.norm_eps)
         self.mlp = MiniMaxH3MLP(cfg)
 
@@ -241,10 +259,10 @@ class MiniMaxH3TokenRefinerBlock(nn.Module):
 
 
 class MiniMaxH3TokenRefiner(nn.Module):
-    def __init__(self, cfg: H3DiTConfig, *, attn_backend: str):
+    def __init__(self, cfg: H3DiTConfig):
         super().__init__()
         self.blocks = nn.ModuleList(
-            [MiniMaxH3TokenRefinerBlock(cfg, attn_backend=attn_backend) for _ in range(cfg.token_refiner_num_layers)]
+            [MiniMaxH3TokenRefinerBlock(cfg) for _ in range(cfg.token_refiner_num_layers)]
         )
         self.final_norm = _rms_norm(cfg.hidden_size, cfg.final_norm_eps)
 
@@ -277,6 +295,7 @@ class MiniMaxH3DiTBlock(nn.Module):
         sin: torch.Tensor,
         adaln_params: tuple[torch.Tensor, ...] | None = None,
         offload_handle=None,
+        sequence_length: int | None = None,
     ) -> torch.Tensor:
         if adaln_params is None:
             adaln_params = self.adaln_proj(adaln_input)
@@ -284,7 +303,10 @@ class MiniMaxH3DiTBlock(nn.Module):
 
         residual = x
         h = _modulate(self.norm1(x), shift_msa, scale_msa, combined_indices)
-        h = self.attn(h, cos=cos, sin=sin, use_rope=True, offload_handle=offload_handle)
+        h = self.attn(
+            h, cos=cos, sin=sin, use_rope=True, offload_handle=offload_handle,
+            sequence_length=sequence_length,
+        )
         x = _gate(residual, gate_msa, h, combined_indices)
 
         residual = x
@@ -315,8 +337,8 @@ class MiniMaxH3FinalLayer(nn.Module):
         shift, scale = self.adaln_proj(adaln_input)
         h = self.norm(x)
         h = h * (1.0 + scale.index_select(0, timestep_indices)) + shift.index_select(0, timestep_indices)
-        video = self.video_out(h[video_mask])
-        audio = self.audio_out(h[audio_mask])
+        video = self.video_out(h[video_mask].to(self.video_out.weight.dtype))
+        audio = self.audio_out(h[audio_mask].to(self.audio_out.weight.dtype))
         return video, audio
 
 
@@ -332,7 +354,7 @@ class MiniMaxH3DiTModel(nn.Module):
         self.condition_proj = nn.Linear(self.cfg.text_dim, self.cfg.hidden_size, bias=True)
         self.time_embedder = MiniMaxH3TimeEmbedder(self.cfg)
         self.rope = MiniMaxH3Rope(self.cfg.rope_inv_freq_len)
-        self.token_refiner = MiniMaxH3TokenRefiner(self.cfg, attn_backend=attn_backend)
+        self.token_refiner = MiniMaxH3TokenRefiner(self.cfg)
         self.blocks = nn.ModuleList(
             [
                 MiniMaxH3DiTBlock(self.cfg, attn_backend=attn_backend, block_id=i)
@@ -348,26 +370,14 @@ class MiniMaxH3DiTModel(nn.Module):
         pre_sink_length: int = 0,
         post_sink_length: int = 0,
     ) -> None:
-        """Propagate SpargeAttn top-k / sink settings to every attention module."""
+        """Configure only the sequence-sharded main-block attention."""
         for mod in self.modules():
-            if isinstance(mod, MiniMaxH3Attention):
+            if isinstance(mod, MiniMaxH3Attention) and mod.sequence_parallel:
                 mod.configure_sparge(
                     topk=topk,
                     pre_sink_length=pre_sink_length,
                     post_sink_length=post_sink_length,
                 )
-
-    def load_fl2va_state_dict(self, state: dict[str, torch.Tensor], *, strict: bool = True) -> tuple[list[str], list[str]]:
-        """Load FL2VA checkpoint; reorder fused qkv from per-head [q,k,v]."""
-        converted: dict[str, torch.Tensor] = {}
-        for k, v in state.items():
-            if k.endswith("attn.qkv_proj.weight"):
-                converted[k] = _reorder_grouped_qkv_to_qkv(
-                    v, num_heads=self.cfg.num_attention_heads, head_dim=self.cfg.attention_head_dim
-                )
-            else:
-                converted[k] = v
-        return self.load_state_dict(converted, strict=strict)
 
     def forward(
         self,
@@ -382,7 +392,6 @@ class MiniMaxH3DiTModel(nn.Module):
         video_mask: torch.Tensor,
         audio_mask: torch.Tensor,
         text_mask: torch.Tensor,
-        offload_blocks: list[bool] | None = None,
         offloader=None,
         block_modulations: list[tuple[torch.Tensor, ...]] | None = None,
         final_modulation: tuple[torch.Tensor, torch.Tensor] | None = None,
@@ -393,12 +402,11 @@ class MiniMaxH3DiTModel(nn.Module):
         Args:
             video_tokens / audio_tokens: noisy latents already patchified where needed
             text_tokens: Qwen3-VL layer-50 embeds [Tt, text_dim]
-            position_ids: [S, 3] for full packed sequence (t,h,w); text uses zeros
+            position_ids: [S, 3] for the full packed sequence (t,h,w)
             token_tags: [S] modality ids
             timesteps: unique timesteps [M]
             inverse_indices: [S] maps each token to unique timestep index
             video_mask / audio_mask / text_mask: boolean masks over packed S
-            offload_blocks: legacy bool list (True=CPU-resident); prefer ``offloader``
             offloader: double-buffer asynchronous H2D controller
             block_modulations / final_modulation: optional AdaLN cache (official deploy
                 precomputes these from the sigma schedule so AdaLN weights need not run
@@ -408,9 +416,9 @@ class MiniMaxH3DiTModel(nn.Module):
         device = video_tokens.device
         dtype = video_tokens.dtype
 
-        v = self.video_patch_proj(video_tokens.to(dtype))
-        a = self.audio_patch_proj(audio_tokens.to(dtype))
-        c = self.condition_proj(text_tokens.to(dtype))
+        v = self.video_patch_proj(video_tokens.to(self.video_patch_proj.weight.dtype)).to(dtype)
+        a = self.audio_patch_proj(audio_tokens.to(self.audio_patch_proj.weight.dtype)).to(dtype)
+        c = self.condition_proj(text_tokens.to(self.condition_proj.weight.dtype)).to(dtype)
         c = self.token_refiner(c)
 
         s = token_tags.shape[0]
@@ -450,8 +458,7 @@ class MiniMaxH3DiTModel(nn.Module):
             sin=sin,
             block_modulations=block_modulations,
             offloader=offloader,
-            offload_blocks=offload_blocks,
-            device=device,
+            sequence_length=v.shape[0] + a.shape[0] + c.shape[0],
         )
         if dbcache is not None and dbcache.cfg.enabled:
             x = self._forward_blocks_dbcache(x, dbcache, ctx)
@@ -463,8 +470,12 @@ class MiniMaxH3DiTModel(nn.Module):
             shift, scale = final_modulation
             h = self.final_layer.norm(x)
             h = h * (1.0 + scale.index_select(0, local_inv)) + shift.index_select(0, local_inv)
-            video = self.final_layer.video_out(h[local_video_mask])
-            audio = self.final_layer.audio_out(h[local_audio_mask])
+            video = self.final_layer.video_out(
+                h[local_video_mask].to(self.final_layer.video_out.weight.dtype)
+            )
+            audio = self.final_layer.audio_out(
+                h[local_audio_mask].to(self.final_layer.audio_out.weight.dtype)
+            )
         else:
             video, audio = self.final_layer(
                 x,
@@ -488,12 +499,6 @@ class MiniMaxH3DiTModel(nn.Module):
             blk, handle = ctx.offloader.acquire(i, prefetch_id=prefetch_id)
         else:
             blk = self.blocks[i]
-            if ctx.offload_blocks is not None and ctx.offload_blocks[i]:
-                blk.to(ctx.device)
-                if prefetch_id is not None:
-                    nxt = i + 1 if prefetch_id < 0 else prefetch_id
-                    if 0 <= nxt < len(self.blocks) and ctx.offload_blocks[nxt]:
-                        self.blocks[nxt].to(ctx.device)
 
         mod = None if ctx.block_modulations is None else ctx.block_modulations[i]
         x = blk(
@@ -504,9 +509,8 @@ class MiniMaxH3DiTModel(nn.Module):
             sin=ctx.sin,
             adaln_params=mod,
             offload_handle=handle,
+            sequence_length=ctx.sequence_length,
         )
-        if ctx.offloader is None and ctx.offload_blocks is not None and ctx.offload_blocks[i]:
-            self.blocks[i].to("cpu")
         return x
 
     def _run_blocks(

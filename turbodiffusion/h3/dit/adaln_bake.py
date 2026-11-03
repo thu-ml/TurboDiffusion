@@ -17,9 +17,9 @@ from pathlib import Path
 import torch
 from safetensors.torch import load_file, save_file
 
-from turbodiffusion.h3.dit.pack import H3_IMGVID_COND_TIMESTEP, H3_REF_COND_TIMESTEP
+from turbodiffusion.h3.dit.pack import H3_IMGVID_COND_TIMESTEP
 
-TASKS = ("t2va", "i2va", "ref2va")
+TASKS = ("i2va",)
 BAKE_FORMAT = "h3_adaln_bake_v1"
 # MiniMaxH3AdalnProj expand_ratio per site (blocks use 6 modulation terms, final 2)
 BLOCK_EXPAND = 6
@@ -33,19 +33,14 @@ def adaln_candidates(
     t_audio: float,
     device: torch.device | str = "cpu",
     imgvid_cond_timestep: float = H3_IMGVID_COND_TIMESTEP,
-    ref_cond_timestep: float = H3_REF_COND_TIMESTEP,
 ) -> torch.Tensor:
     """Candidate AdaLN timesteps for one denoise step.
 
     Single source of truth for both sampling and offline baking; the unique set
     of these values is exactly what the AdaLN table must cover.
     """
-    if task == "t2va":
-        vals = [t_video, t_audio]
-    elif task in ("i2va", "fl2va"):
+    if task in ("i2va", "fl2va"):
         vals = [t_video, t_audio, max(t_video, float(imgvid_cond_timestep))]
-    elif task == "ref2va":
-        vals = [t_video, t_audio, max(t_video, float(ref_cond_timestep)), 1.0]
     else:
         raise ValueError(f"unknown task {task!r}")
     return torch.tensor(vals, device=device, dtype=torch.float32)

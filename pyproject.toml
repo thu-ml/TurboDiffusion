@@ -55,6 +55,7 @@ turbodiffusion-serve = "turbodiffusion.serve.tui:main"
 
 [project.optional-dependencies]
 h3 = [
+  "torch==2.11.0",
   "transformers>=4.57.0,<5",
   "diffusers==0.38.0",
   "safetensors>=0.4.0",

@@ -1,31 +1,4 @@
-"""Which canvas a request generates on, and which size it is handed over at.
-
-H3-Base is a 768p model. The rule the checkpoint was released under anchors the
-*short edge* at 768 and caps area at ``768*1344``, so its canvases are deliberately
-not equal-area: 16:9 gets 1344x768 while 1:1 gets 768x768, a third fewer tokens for
-the square one.
-
-The tiers here anchor on area instead — ``720p`` means ``w*h`` near ``960**2``
-whatever the ratio — which is the convention the rest of our stack states resolution
-in. That makes every tier off-distribution for H3, and in both directions: below
-native at wide ratios, above it at square ones, where ``720p`` resolves to 960x960
-against a native 768x768. Nothing here clamps that. A tier is a request to run the
-model on a canvas it was not trained on, and whether a given cell holds up is a
-question for the output, not for this module.
-
-Every canvas side is a multiple of 32, because the VAE compresses space 16x and the
-DiT patch is 2x2, so an odd latent side has no whole patch to sit in. This is why a
-literal 720-pixel side does not exist here: 720 is 22.5 patches, and a "720p" 16:9
-canvas is 1312x736. The two sides are chosen together against the ratio rather than
-resolved one at a time, which is what keeps that substitution close enough to the
-requested ratio to matter — see :func:`_fit_canvas`.
-
-The delivery size is the other half of the same question. Rounding the canvas to 32
-throws away the exact ratio of the image that produced it — a 640x702 keyframe
-generates on 768x832, which is 1.2% taller in proportion than it should be. The
-delivery size covers the same area resolved to a multiple of 2 instead, which does
-carry the ratio, and the result is resized onto it once at the end.
-"""
+"""Native H3 canvas sizing, optional area tiers and even-pixel delivery sizes."""
 
 from __future__ import annotations
 
@@ -262,37 +235,3 @@ def delivery_size(
         _round_multiple(height / scale, H3_DELIVERY_MULTIPLE),
         _round_multiple(width / scale, H3_DELIVERY_MULTIPLE),
     )
-
-
-def keyframe_fit(
-    src_w: float, src_h: float, target_w: float, target_h: float, tolerance: float = 0.05
-) -> str:
-    """How a keyframe is put on the canvas: ``"stretch"``, or ``"crop"`` to it first.
-
-    Measured against the ratio the canvas was *asked* for, not the canvas itself. The
-    canvas is a multiple of 32 and the request is not, and at 360p that gap alone can
-    reach 6% — enough to crop the very frame the canvas was derived from. Comparing
-    against the request instead leaves the rounding to :func:`delivery_size`, which is
-    what undoes it, and leaves this deciding only the question it is for.
-
-    That question is the closing frame. Stretching one shot at a genuinely different
-    ratio than the opening frame would hand the model a distorted version of the frame
-    the video has to end on, so it is cropped and the video ends on its middle.
-    """
-    ratio = (src_w / src_h) / (target_w / target_h)
-    return "stretch" if 1 / (1 + tolerance) < ratio < 1 + tolerance else "crop"
-
-
-def describe(
-    aspect_w: float,
-    aspect_h: float,
-    *,
-    resolution: str | None = None,
-    short_edge: int = H3_CANVAS_SHORT_EDGE,
-) -> str:
-    """One line for a log: which tier, which canvas, which delivery size."""
-    ph, pw = model_canvas(aspect_w, aspect_h, resolution=resolution, short_edge=short_edge)
-    dh, dw = delivery_size(aspect_w, aspect_h, resolution=resolution, short_edge=short_edge)
-    tier = normalize_resolution(resolution) or H3_NATIVE_RESOLUTION
-    deliver = "" if (dh, dw) == (ph, pw) else f" -> deliver {dw}x{dh}"
-    return f"{tier} canvas {pw}x{ph}{deliver}"

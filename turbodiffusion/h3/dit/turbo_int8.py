@@ -8,6 +8,7 @@ from safetensors import safe_open
 from safetensors.torch import load_file
 
 from turbodiffusion.h3.dit.model import MiniMaxH3DiTModel
+from turbodiffusion.h3.dit.weight_loader import FP32_PROJECTIONS
 
 FORMAT = "h3_fl2va_turbo_w8a8_128"
 
@@ -62,6 +63,15 @@ def load_fl2va_turbo_int8(
         if (f.metadata() or {}).get("format") != FORMAT:
             raise ValueError(f"expected {FORMAT} checkpoint: {path}")
     state = load_file(str(path), device="cpu")
+    required_fp32 = [
+        name for name in model.state_dict()
+        if name == "rope.inv_freq" or name.startswith(FP32_PROJECTIONS)
+    ]
+    if any(name in state and state[name].dtype != torch.float32 for name in required_fp32):
+        raise ValueError(
+            "W8A8 checkpoint lost H3 FP32 tensors; re-export from the full model "
+            "with turbodiffusion.inference.export_h3_w8a8"
+        )
     incompatible = model.load_state_dict(state, strict=False, assign=True)
     missing = [k for k in incompatible.missing_keys if not is_mlp_alias_key(k)]
     if missing or incompatible.unexpected_keys:

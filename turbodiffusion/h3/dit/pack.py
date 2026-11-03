@@ -7,8 +7,6 @@ import numpy as np
 import torch
 
 from turbodiffusion.h3.dit.config import H3DiTConfig, MODALITY_AUDIO, MODALITY_TEXT, MODALITY_VIDEO, PACKED_SEQUENCE_ALIGNMENT
-# Canvas geometry lives in turbodiffusion.h3.resolution, which owns the tiers as well; these are
-# re-exported here because every call site already imports them from the packing.
 from turbodiffusion.h3.resolution import (  # noqa: F401
     H3_CANVAS_MAX_PIXELS,
     H3_CANVAS_SHORT_EDGE,
@@ -28,31 +26,6 @@ H3_IMGVID_COND_TIMESTEP = 1.0
 # against ``frame_count``. Nothing else is a layout the checkpoint was trained on,
 # so a keyframe asked for anywhere in between is refused rather than approximated.
 H3_FL2VA_KEYFRAME_ANCHORS: tuple[tuple[int, ...], ...] = ((0,), (-1,), (0, -1))
-# Ref2VA visual references are held at t=0.999 (not fully clean)
-H3_REF_COND_TIMESTEP = 0.999
-# H3 model card, H3-Base-Ref2VA row: "Images: <= 9 images; Videos: <= 3 clips,
-# each 2-15s, total <= 15s; Maximum number of files across all input types is 12".
-H3_MAX_REF_IMAGES = 9
-H3_MAX_REF_VIDEOS = 3
-H3_MAX_REF_FILES = 12
-H3_REF_VIDEO_MIN_SECONDS = 2.0
-H3_REF_VIDEO_MAX_SECONDS = 15.0
-H3_REF_VIDEO_TOTAL_SECONDS = 15.0
-# Standalone audio references carry the same per-file and total duration budget as
-# clips, but it is a separate budget: 15s of clips and 15s of audio both fit.
-H3_MAX_REF_AUDIOS = 3
-H3_REF_AUDIO_MIN_SECONDS = 2.0
-H3_REF_AUDIO_MAX_SECONDS = 15.0
-H3_REF_AUDIO_TOTAL_SECONDS = 15.0
-# The two geometries a reference is put on. An image gets its own short edge with no
-# area budget; a video gets the canvas rule the generated video follows.
-H3_REF_IMAGE_SHORT_EDGE = 2048
-
-
-
-
-
-
 def target_latent_hw(
     short_edge: int,
     aspect_ratio: str,
@@ -60,14 +33,7 @@ def target_latent_hw(
     resolution: str | None = None,
     canvas_latent_hw: tuple[int, int] | None = None,
 ) -> tuple[int, int]:
-    """The canvas the target video rows are laid out on → ``(latent_h, latent_w)``.
-
-    ``canvas_latent_hw`` is the answer, handed down from the encode that already put
-    the keyframes or clips on it. The other arguments are the question, for a request
-    with nothing encoded to agree with. Preferring the answer is what keeps the VAE
-    and the packing from deriving the same geometry twice and disagreeing — a
-    disagreement that surfaces as condition rows which do not fit their block.
-    """
+    """Use the encoded keyframe canvas, or resolve the requested latent size."""
     if canvas_latent_hw is None:
         return compute_latent_hw(short_edge, aspect_ratio, resolution=resolution)
     lh, lw = (int(x) for x in canvas_latent_hw)
@@ -161,14 +127,7 @@ def _video_t_grid(length: int, origin: float) -> torch.Tensor:
 
 
 def _keyframe_anchor_span(length: int) -> float:
-    """The same span, summed the way the official last-keyframe anchor sums it.
-
-    Deliberately not ``_video_t_span``. That one accumulates sequentially, which is
-    the order the ref2va t-origins are laid down in; this one sums through numpy,
-    which is pairwise. The two disagree in the last ulp from 16 latent frames on,
-    and the anchor is the one place that difference is visible — it decides where
-    the model reads the closing frame as sitting.
-    """
+    """Match the official last-keyframe anchor's pairwise NumPy sum."""
     spans = np.ones(int(length), dtype=np.float64) * _FRAME_RESCALE
     group = len(_FRAME_PER_TOKEN)
     for i in range(group):
@@ -203,15 +162,13 @@ class PackedBatch:
     patch_h: int
     patch_w: int
     audio_t: int
-    # I2VA / FL2VA / Ref2VA extras (optional)
+    # FL2VA keyframe conditioning.
     update_mask: torch.Tensor | None = None  # over visual rows [n_cond+n_target]; True=denoise
     visual_cond_rows: torch.Tensor | None = None  # [n_cond, 96] clean DiT-space
-    audio_cond_rows: torch.Tensor | None = None  # [n_cond_audio, Ca] clean (Ref2VA)
     n_cond_rows: int = 0
-    n_cond_audio_rows: int = 0
     n_target_rows: int = 0
     frame_count: int = 0
-    task: str = "t2va"
+    task: str = "i2va"
 
     def patchify_video(self, video: torch.Tensor) -> torch.Tensor:
         # video: [1,C,T,H,W] -> [N, C*pt*ph*pw]  (official: nctrhpwq -> nthwcrpq)

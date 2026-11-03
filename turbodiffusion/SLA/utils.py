@@ -33,7 +33,7 @@ def compress_kernel(
 
     x_offset = idx_bh * L * D
     xm_offset = idx_bh * ((L + BLOCK_L - 1) // BLOCK_L) * D
-    x = tl.load(X + x_offset + offs_l[:, None] * D + offs_d[None, :], mask=offs_l[:, None] < L, other=0)
+    x = tl.load(X + x_offset + offs_l[:, None] * D + offs_d[None, :], mask=offs_l[:, None] < L)
 
     nx = min(BLOCK_L, L - idx_l * BLOCK_L)
     x_mean = tl.sum(x, axis=0, dtype=tl.float32) / nx

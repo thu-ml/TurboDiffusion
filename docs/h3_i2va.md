@@ -1,11 +1,12 @@
 # H3 FL2VA with TurboDiffusion W8A8
 
 The H3 model and inference implementation are included in this repository.
-The default `fullopt-dbcache` profile performs **four DMD denoising updates**
-(`dit.steps: 5` means five sigma points) with conservative F8/B4 caching:
-threshold 0.20, one warmup, at most one consecutive hit, and TaylorSeer disabled.
-`fullopt` uses the same settings without DBCache. Both profiles retain the
-precomputed AdaLN table.
+The default `fullopt` profile performs **four DMD denoising updates**
+(`dit.steps: 5` means five sigma points), without DBCache.
+`fullopt-dbcache` explicitly enables conservative F8/B4 caching: threshold 0.20,
+one warmup, at most one consecutive hit, and TaylorSeer disabled.
+Both profiles retain the precomputed AdaLN table. Cache hits depend on the input;
+no cache speedup or quality-parity claim is made for the default profile.
 
 ## Implementation
 
@@ -20,6 +21,8 @@ precomputed AdaLN table.
   video/audio decoding and MP4 export. The video VAE uses the same native
   `Int8Linear` for 144 attention/FFN projections in its 36 ViT decoder blocks.
 - `turbodiffusion/inference/export_h3_w8a8.py`: full-model W8A8 export.
+- `turbodiffusion/h3/nccl.py`: loaded-library verification and an eight-rank
+  asynchronous INT8/FP32 all-to-all stress test with pinned H2D overlap.
 
 No separate H3 inference checkout is required. W8A8 uses TurboDiffusion's
 existing CUDA quantization/GEMM kernels, with 128x128 weight blocks; it does
@@ -29,17 +32,33 @@ Video decoder I/O projections, convolutions and other unquantized tensors
 retain BF16 (normalization follows the public VAE implementation).
 SpargeAttn is a separately installed attention dependency.
 
+The DiT retains FP32 RoPE frequencies and the original FP32 video/audio input
+and output projections and timestep MLP. RMSNorm weights follow the original
+checkpoint (BF16); normalization is not an INT8 projection. Inputs are cast to
+each projection's dtype, then back to the block-stack dtype as needed.
+The replicated text refiner always uses local dense SDPA, without Ulysses,
+INT8 communication or SpargeAttn. Main-block attention removes the alignment
+tail before attention and restores the padded shape before reverse Ulysses,
+matching the reference's separation of valid tokens from padding.
+
 ## Installation
 
-Use Python 3.10 or newer and the repository's CUDA build environment:
+On Linux RTX 5090 hosts, use Python 3.10 or newer, CUDA toolkit 12.8, and the official
+PyTorch 2.11 cu128 wheels. Install PyTorch before building CUDA extensions:
 
 ```bash
+python -m venv .venv-h3
+source .venv-h3/bin/activate
+pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 \
+  --index-url https://download.pytorch.org/whl/cu128
 pip install -e '.[h3]' --no-build-isolation
 ```
 
-Local validation used Python 3.10, PyTorch `2.7.0+cu128`, CUDA 12.8,
-Triton 3.3.0, Transformers 4.57.3 and Diffusers 0.38.0. The H3 extra pins
-Diffusers to that tested version.
+The tested combination is PyTorch `2.11.0+cu128`, its bundled NCCL `2.28.9`,
+CUDA 12.8, Triton 3.6.0, Transformers 4.57.3 and Diffusers 0.38.0.
+The H3 extra pins PyTorch 2.11 and Diffusers 0.38.0 without changing the
+requirements for Wan. Rebuild both TurboDiffusion and SpargeAttn extensions
+when switching PyTorch versions; binaries built for 2.7 are not reusable.
 
 Install `ffmpeg` on the host for video/audio export. The profiles use 8 GPU
 ranks for DiT/VAE and 4 for text/keyframe encoding. CPU RAM must hold each
@@ -70,14 +89,15 @@ This revision's explicit `TORCH_CUDA_ARCH_LIST` allowlist predates SM120,
 so the command lets its build script detect the visible GPU instead.
 No SpargeAttn source patch is required for this adapter.
 
-`turbodiffusion/h3/attention.py` reuses the repository's pooled top-k block
+`turbodiffusion/h3/attention.py` uses H3-scoped pooled top-k block
 selection, then makes prefix/suffix query rows and key columns dense for
 text, audio and first-frame conditioning tokens. Blocks are Q128/K64
 (Q64/K128 on SM90), with sinks rounded up to block boundaries. The mask is
 passed as `mask_id`; `pvthreshd=1e6` disables additional PV-based skipping.
 The public top-k convenience function is not called because it does not
-accept H3's prefix/suffix sink lengths. The shared pooling helper explicitly
+accept H3's prefix/suffix sink lengths. `turbodiffusion/h3/pooling.py` explicitly
 zero-fills masked tail elements for sequences not divisible by the block size.
+The shared `turbodiffusion/SLA/utils.py` and Wan/SLA behaviour are unchanged.
 
 This preserves the block-mask policy, not bitwise equivalence with the earlier
 local backend: quantization and accumulation inside the public kernel differ.
@@ -88,63 +108,33 @@ not a silent fallback. For a fully dense reference, explicitly set
 
 ### NCCL on RTX 5090
 
-For RTX 5090 hosts, build NCCL 2.26.2 from public source and use that library
-in the H3 inference shell. Do not copy a library from another machine into
-PyTorch's `site-packages`. The official `v2.26.2-1` tag resolves to
-`f44ac759fee12ecb3cc6891e9e739a000f66fd70`.
+Use the NCCL 2.28.9 supplied by the official PyTorch 2.11 cu128 installation
+above. Do not manually preload another NCCL version or replace files in
+PyTorch's environment. The earlier source-build recommendation for NCCL
+2.26.2 is withdrawn: it was not stable in the reviewer's 5090 tests.
 
-Install Git, Make and a CUDA-compatible C++ compiler first. The example uses
-CUDA 12.8 with a CUDA 12.8 PyTorch build; adjust the toolkit path for your
-environment. Compiling `sm_120` requires CUDA 12.8 or newer. This build targets
-5090 GPUs only; mixed-architecture hosts need additional `NVCC_GENCODE` entries.
+Before inference, remove any previous NCCL overrides and check the library
+actually mapped into the process:
 
 ```bash
-export CUDA_HOME=/usr/local/cuda-12.8
-export NCCL_SRC="$HOME/.local/src/nccl-2.26.2"
-mkdir -p "$(dirname "$NCCL_SRC")"
-git clone --branch v2.26.2-1 --depth 1 \
-  https://github.com/NVIDIA/nccl.git "$NCCL_SRC"
-test "$(git -C "$NCCL_SRC" rev-parse HEAD)" = \
-  f44ac759fee12ecb3cc6891e9e739a000f66fd70
-make -C "$NCCL_SRC" -j"${NCCL_BUILD_JOBS:-8}" src.build \
-  CUDA_HOME="$CUDA_HOME" \
-  NVCC_GENCODE="-gencode=arch=compute_120,code=sm_120"
+unset LD_PRELOAD LD_LIBRARY_PATH NCCL_HOME
+python -m turbodiffusion.h3.nccl
+python -m torch.distributed.run --standalone --nproc_per_node=8 \
+  --module turbodiffusion.h3.nccl --stress --iterations 30
 ```
 
-After a successful build, set these variables in the same shell used to launch
-H3. They are inherited by all `torchrun` workers. No root installation or
-replacement of the Python environment's files is needed.
+The checker calls `ncclGetVersion` on the library found in `/proc/self/maps`
+and verifies both its runtime version and its path inside the installed
+PyTorch wheel's `nvidia/nccl/lib`. `compiled_nccl` is printed separately;
+`torch.cuda.nccl.version()` alone does not verify a preloaded binary.
 
-```bash
-export NCCL_HOME="$HOME/.local/src/nccl-2.26.2/build"
-export LD_LIBRARY_PATH="$NCCL_HOME/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export LD_PRELOAD="$NCCL_HOME/lib/libnccl.so.2${LD_PRELOAD:+:$LD_PRELOAD}"
-
-python - <<'PY'
-import os
-from pathlib import Path
-import torch
-
-expected = (Path(os.environ["NCCL_HOME"]) / "lib/libnccl.so.2").resolve(strict=True)
-version = torch.cuda.nccl.version()
-loaded = {
-    Path(line.split(maxsplit=5)[5].strip()).resolve()
-    for line in Path("/proc/self/maps").read_text().splitlines()
-    if len(line.split(maxsplit=5)) == 6 and "libnccl.so" in line.split(maxsplit=5)[5]
-}
-print("PyTorch:", torch.__version__, "CUDA:", torch.version.cuda)
-print("NCCL:", version, "loaded:", sorted(map(str, loaded)))
-if version != (2, 26, 2) or loaded != {expected}:
-    raise SystemExit("NCCL version/path mismatch; check the runtime environment before inference")
-PY
-```
-
-The local H3 validation environment reports NCCL 2.26.2 but contains a binary
-that differs from the official wheel. The source-build procedure above makes
-the intended dependency explicit; it has **not yet been validated with a full
-H3 multi-GPU run**, and does not establish parity with that local binary.
-Validate the default INT8/asynchronous all-to-all path on the target host
-before collecting benchmarks.
+Isolated validation on 2026-11-02 used 8x RTX 5090 32GB, driver 595.58.03,
+two four-GPU PHB groups with SYS links across groups, and no NVLink.
+With no NCCL preload, the official 2.11/2.28.9 combination passed six
+eight-rank stress launches, H3 sampling and decoding, and separate four-rank
+text/keyframe encoding. This establishes the tested combination on that
+host, not the root cause of 2.26.2 failures or stability on every 5090 host.
+Run the stress test on each target machine before collecting benchmarks.
 
 If DiT all-to-all fails, restart inference with `H3_USE_NCCL_A2A=0` to select
 the existing all-gather fallback. This changes communication cost and does
@@ -178,6 +168,9 @@ not a private checkout. Third-party attribution is in `turbodiffusion/h3/NOTICE`
 Model weights remain subject to the
 [MiniMax H3 Community License Agreement](https://huggingface.co/liran12345/h3-turbo-diffusion/blob/main/LICENSE),
 not this repository's code license.
+The current checkpoint is hosted by its publisher's personal account;
+an organization-hosted release is not yet available. This PR does not
+transfer weight ownership or broaden redistribution rights.
 
 ## Export W8A8
 
@@ -186,14 +179,24 @@ Run from the TurboDiffusion checkout after building its CUDA extension:
 ```bash
 CUDA_VISIBLE_DEVICES=0 python -m turbodiffusion.inference.export_h3_w8a8 \
   --model-path /models/h3-turbo-diffusion/transformer \
-  --output /models/h3-turbo-diffusion/model_w8a8.safetensors
+  --output /models/h3-turbo-diffusion/model_w8a8.safetensors \
+  --adaln-output /models/h3-turbo-diffusion/adaln/adaln_i2va_s5_v12_a3.safetensors
 ```
 
 The exporter wraps only main-block QKV, attention output and MLP projections.
 It does not modify the source checkpoint or the CUDA kernels.
-Reuse `adaln/adaln_i2va_s5_v12_a3.safetensors` **and its companion `.json`**
-unchanged for `i2va / steps=5 / video_shift=12 / audio_shift=3`.
-W8A8 export alone does not require re-baking AdaLN.
+The optional `--adaln-output` regenerates the table for
+`i2va / steps=5 / video_shift=12 / audio_shift=3`, preserving the source FP32
+timestep MLP and writing its companion `.json`. Omit it to reuse an existing
+matching table. W8A8 and RoPE changes alone do not require re-baking AdaLN,
+but tables created by an older exporter using a BF16 timestep MLP should be
+regenerated to reproduce the original mixed-precision computation.
+
+Re-export INT8 checkpoints created before the FP32-preservation fix.
+The loader rejects reduced-precision RoPE/input/output/timestep tensors
+with an actionable error instead of silently upcasting already-rounded values.
+The full BF16/mixed-precision source checkpoint does not need to be downloaded
+again or modified.
 
 The video VAE is quantized once at decode startup from the original public
 weights using the unchanged native `Int8Linear.from_linear`. No separate VAE
@@ -214,12 +217,12 @@ bash scripts/inference_h3_i2va.sh \
   --output-dir output/h3_demo
 ```
 
-Conservative DBCache is enabled by default (`--profile fullopt-dbcache`).
-Add `--profile fullopt` to disable DBCache for the no-cache reference.
+`fullopt` is the no-cache default.
+Add `--profile fullopt-dbcache` to opt into conservative DBCache.
 Both profiles default to native W8A8 video decoding; use `--vae-precision bf16`
 for the unquantized video decoder reference.
 Use separate output directories and identical inputs/seed/duration to compare
-profiles. The output with audio is `<output-dir>/t2va.mp4`; `run.yaml` records
+profiles. The output with audio is `<output-dir>/i2va.mp4`; `run.yaml` records
 the configuration, and conditioning/latent artifacts remain alongside it.
 
 To reuse conditioning, pass both `--prompt-embeds` and `--visual-cond`, plus
@@ -250,9 +253,20 @@ public dependency:
 
 ```bash
 H3_TEST_PUBLIC_SPARGE=1 python -m unittest discover -s tests -p 'test_h3*.py' -v
+python -m torch.distributed.run --standalone --nproc_per_node=8 \
+  tests/h3_sequence_parallel_check.py
 ```
 
-The validation environment retains the local NCCL binary described above;
-it is not a fresh public-only installation. The bundled text/keyframe encoding
-path and source-built NCCL still need full-model end-to-end validation.
-Unit tests do not establish quality or latency parity for those paths.
+All 41 H3 tests passed with real native W8A8/public SpargeAttn CUDA coverage.
+The isolated PyTorch 2.11 validation uses the official wheel NCCL and rebuilt
+native W8A8/public SpargeAttn extensions. Tests cover local dense refinement of
+long prompts, FP32 preservation and legacy-checkpoint rejection, padding
+exclusion, rank-zero-only video conversion, and the actual NCCL version API.
+On 2026-11-03, the 513-token SP8/local regression passed for both attention
+backends. Fresh four-rank encoding followed by default eight-rank sampling and
+decoding also passed; the optional cache profile passed sample/decode using
+that same freshly encoded conditioning. Both exported 124-frame audio/video
+MP4s. This is a pipeline smoke test, not a quality or latency comparison.
+Validation on other GPU topologies and SM90 hardware remains outstanding.
+Generated baseline/accelerated comparisons are not included in this PR;
+unit tests and pipeline smoke tests do not establish quality or latency parity.

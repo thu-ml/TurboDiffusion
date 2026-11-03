@@ -190,7 +190,10 @@ class H3VAEProcessor:
         frames = video.decode_base(z)
         if isinstance(frames, tuple):
             frames = frames[0]
-        frames = pixels_to_uint8(frames, self.video_config.get("pixel_norm_type", "imagenet"))
+        frames = (
+            pixels_to_uint8(frames, self.video_config.get("pixel_norm_type", "imagenet"))
+            if self.rank == 0 else None
+        )
         del video, z
         gc.collect()
         torch.cuda.empty_cache()
@@ -241,5 +244,5 @@ class H3VAEProcessor:
         subprocess.run([
             "ffmpeg", "-y", "-i", str(output_dir / "video.mp4"),
             "-i", str(output_dir / "audio.wav"), "-c:v", "copy", "-c:a", "aac",
-            str(output_dir / "t2va.mp4"),
+            str(output_dir / "i2va.mp4"),
         ], check=True, capture_output=True)

@@ -40,12 +40,12 @@ class H3AttentionTest(unittest.TestCase):
                 q = torch.randn(1, length, 2, 64)
                 nq, nk = (length + block_q - 1) // block_q, (length + block_k - 1) // block_k
                 mask = torch.zeros(1, 2, nq, nk, dtype=torch.int8)
-                pooling = types.ModuleType("turbodiffusion.SLA.utils")
+                pooling = types.ModuleType("turbodiffusion.h3.pooling")
                 pooling.get_block_map = Mock(return_value=(mask, None, None))
                 public = types.ModuleType("spas_sage_attn")
                 public.block_sparse_sage2_attn_cuda = Mock(side_effect=lambda q, k, v, **kw: v)
                 with patch.dict(sys.modules, {
-                    "spas_sage_attn": public, "turbodiffusion.SLA.utils": pooling,
+                    "spas_sage_attn": public, "turbodiffusion.h3.pooling": pooling,
                 }), patch("torch.cuda.get_device_capability", return_value=arch):
                     out = attention_fn(
                         q, q, q, backend="sparge_attn", scale=0.125,
@@ -95,7 +95,7 @@ class H3AttentionTest(unittest.TestCase):
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
     def test_partial_block_pooling_matches_reference(self):
-        from turbodiffusion.SLA.utils import mean_pool
+        from turbodiffusion.h3.pooling import mean_pool
 
         for length in (129, 192, 257):
             for block in (64, 128):
@@ -112,7 +112,7 @@ class H3AttentionTest(unittest.TestCase):
         "Set H3_TEST_PUBLIC_SPARGE=1 after building the pinned public dependency",
     )
     def test_public_cuda_kernel_matches_its_block_mask(self):
-        from turbodiffusion.SLA.utils import get_block_map
+        from turbodiffusion.h3.pooling import get_block_map
 
         torch.manual_seed(17)
         bq, bk = (64, 128) if torch.cuda.get_device_capability() == (9, 0) else (128, 64)

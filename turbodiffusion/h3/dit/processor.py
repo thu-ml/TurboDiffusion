@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import time
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from turbodiffusion.h3.dit.pack import (
     PackedBatch,
     build_i2va_packed,
 )
-from turbodiffusion.h3.dit.weight_loader import load_fl2va_streaming
+from turbodiffusion.h3.dit.weight_loader import load_fl2va_streaming, materialize_cpu_model
 from turbodiffusion.h3.resolution import normalize_resolution
 from turbodiffusion.h3.offload import BlockOffloader, build_preload_map
 from turbodiffusion.h3.parallel import get_parallel_state, init_parallel
@@ -95,8 +96,6 @@ class H3DiTProcessor:
                     flush=True,
                 )
 
-        import os
-
         # meta init → empty BF16 on CPU (FP32 empty would be ~132GB/rank and OOM×8)
         with torch.device("meta"):
             self.model = MiniMaxH3DiTModel(arch, attn_backend=self.attn_backend)
@@ -113,12 +112,7 @@ class H3DiTProcessor:
             if state.world_size > 1:
                 barrier()
         else:
-            self.model.to_empty(device="cpu")
-            for p in self.model.parameters():
-                p.data = torch.empty(p.shape, dtype=self.dtype, device="cpu")
-            for b in self.model.buffers():
-                if b.is_floating_point():
-                    b.data = torch.empty(b.shape, dtype=self.dtype, device="cpu")
+            materialize_cpu_model(self.model, self.dtype)
 
             # BF16×8 ≈528GB; with ≥1Ti host RAM parallel load is fine.
             # Set H3_SERIAL_LOAD=1 to reduce simultaneous checkpoint reads.
@@ -295,8 +289,7 @@ class H3DiTProcessor:
         if self.sparge_attn_pre_sink == "auto":
             # Dense-attend everything before target video rows.
             pre = int(packed.text_mask.sum().item() + packed.audio_mask.sum().item())
-            if packed.task in ("i2va", "ref2va"):
-                pre += int(packed.n_cond_rows)
+            pre += int(packed.n_cond_rows)
         else:
             pre = int(self.sparge_attn_pre_sink)
         self.model.configure_sparge(
@@ -345,11 +338,7 @@ class H3DiTProcessor:
             print(f"[dit] released cuda_alloc≈{alloc:.1f}GB", flush=True)
 
     def _cfg_resolution(self) -> str | None:
-        """The resolution tier the config asks for, for a caller that named none.
-
-        Same mechanism as ``match_ref_duration``: hold a config, state nothing, get
-        what the config says. Unset means H3's own 768p short-edge rule.
-        """
+        """Use the configured resolution, or H3's native canvas rule."""
         return normalize_resolution((self.cfg.get("sample") or {}).get("resolution"))
 
 
