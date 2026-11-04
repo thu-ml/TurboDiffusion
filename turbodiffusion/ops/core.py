@@ -377,6 +377,101 @@ def layernorm_noparam(x, eps):
 
     return y
 
+@triton.jit
+def _layer_norm_modulate_noparam_fwd_fused(
+    X,
+    Y,
+    Mean,
+    Rstd,
+    Scale,
+    Shift,
+    x_stride,
+    y_stride,
+    scale_b_stride,
+    shift_b_stride,
+    M: tl.constexpr,
+    L: tl.constexpr,
+    N: tl.constexpr,
+    N2: tl.constexpr,
+    eps,
+    BLOCK_M: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    rows = pid * BLOCK_M + tl.arange(0, BLOCK_M)
+    cols = tl.arange(0, N2)
+    row_mask = rows < M
+    col_mask = cols < N
+    mask = row_mask[:, None] & col_mask[None, :]
+
+    x_ptr = X + rows[:, None] * x_stride + cols[None, :]
+    y_ptr = Y + rows[:, None] * y_stride + cols[None, :]
+
+    x = tl.load(x_ptr, mask=mask, other=0.0).to(tl.float32)
+    mean = tl.sum(x, axis=1, keep_dims=True) / N
+    var = tl.sum((x - mean) * (x - mean), axis=1, keep_dims=True) / N
+    rstd = 1 / tl.sqrt(var + eps)
+
+    _mean = tl.reshape(mean, (BLOCK_M))
+    _rstd = tl.reshape(rstd, (BLOCK_M))
+    tl.store(Mean + rows, _mean, mask=row_mask)
+    tl.store(Rstd + rows, _rstd, mask=row_mask)
+
+    batch = rows // L
+    scale = tl.load(Scale + batch[:, None] * scale_b_stride + cols[None, :], mask=mask, other=0.0).to(tl.float32)
+    shift = tl.load(Shift + batch[:, None] * shift_b_stride + cols[None, :], mask=mask, other=0.0).to(tl.float32)
+
+    x_hat = (x - mean) * rstd
+    x_hat = x_hat.to(X.type.element_ty).to(tl.float32)
+    y = x_hat * (1.0 + scale) + shift
+    tl.store(y_ptr, y.to(Y.type.element_ty), mask=mask)
+
+
+def layernorm_modulate_noparam(x, scale, shift, eps, output_dtype=None):
+    assert x.dim() == 3, "FastLayerNorm.modulate expects [B, L, C] input"
+    if not x.is_contiguous():
+        x = x.contiguous()
+    if scale.stride(-1) != 1:
+        scale = scale.contiguous()
+    if shift.stride(-1) != 1:
+        shift = shift.contiguous()
+
+    B, L, N = x.shape
+    M = B * L
+    output_dtype = output_dtype or torch.promote_types(torch.promote_types(x.dtype, scale.dtype), shift.dtype)
+    y = torch.empty_like(x, dtype=output_dtype)
+    mean = torch.empty((M,), dtype=torch.float32, device=x.device)
+    rstd = torch.empty((M,), dtype=torch.float32, device=x.device)
+
+    num_warps = 8
+    N2 = triton.next_power_of_2(N)
+    BLOCK_M = 32 if N <= 512 else 1
+
+    scale_b_stride = scale.stride(0) if scale.dim() > 1 else 0
+    shift_b_stride = shift.stride(0) if shift.dim() > 1 else 0
+
+    _layer_norm_modulate_noparam_fwd_fused[(triton.cdiv(M, BLOCK_M),)](
+        x,
+        y,
+        mean,
+        rstd,
+        scale,
+        shift,
+        x.stride(1),
+        y.stride(1),
+        scale_b_stride,
+        shift_b_stride,
+        M,
+        L,
+        N,
+        N2,
+        eps,
+        num_warps=num_warps,
+        BLOCK_M=BLOCK_M,
+    )
+
+    return y
+
+
 def layernorm(x, w, b, eps, elementwise_affine=True):
     if elementwise_affine:
         assert w is not None and b is not None
@@ -476,6 +571,13 @@ class FastLayerNorm(nn.Module):
 
     def forward(self, x):
         return layernorm(x.float(), self.weight, self.bias, self.eps, self.elementwise_affine).to(x.dtype)
+
+    def modulate(self, x, scale, shift, out_dtype=None):
+        output_dtype = out_dtype or torch.promote_types(torch.promote_types(x.dtype, scale.dtype), shift.dtype)
+        if self.elementwise_affine:
+            y = self.forward(x).float() * (1 + scale) + shift
+            return y.to(output_dtype)
+        return layernorm_modulate_noparam(x, scale, shift, self.eps, output_dtype=output_dtype)
     
     @classmethod
     def from_layernorm(cls, original_layernorm):

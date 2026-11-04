@@ -169,11 +169,11 @@ def rope_apply(x, freqs):
 
     # freqs is already sharded to local seq_len under flattened CP
     freqs = freqs.view(seq_len, head_dim // 2)
-    cos = torch.cos(freqs).to(torch.float32)
-    sin = torch.sin(freqs).to(torch.float32)
+    cos = torch.cos(freqs)
+    sin = torch.sin(freqs)
 
     # Apply the rotation
-    rotated = flash_apply_rotary_emb(x.to(torch.float32), cos, sin, interleaved=True, inplace=False)
+    rotated = flash_apply_rotary_emb(x, cos, sin, interleaved=True, inplace=False)
 
     return rotated.to(x.dtype)
 
@@ -210,6 +210,14 @@ class WanLayerNorm(nn.LayerNorm):
         """
         with amp.autocast("cuda", dtype=torch.float32):
             return super().forward(x.float()).type_as(x)
+
+
+def _modulate_norm(norm, x, scale, shift, out_dtype=None):
+    modulate = getattr(norm, "modulate", None)
+    if modulate is not None:
+        return modulate(x, scale, shift, out_dtype=out_dtype)
+    y = norm(x).float() * (1 + scale) + shift
+    return y if out_dtype is None else y.to(out_dtype)
 
 
 class WanSelfAttention(nn.Module):
@@ -401,14 +409,14 @@ class WanAttentionBlock(nn.Module):
         assert e[0].dtype == torch.float32
 
         # self-attention
-        y = self.self_attn((self.norm1(x).float() * (1 + e[1]) + e[0]).type_as(x), seq_lens, freqs)
+        y = self.self_attn(_modulate_norm(self.norm1, x, e[1], e[0], out_dtype=x.dtype), seq_lens, freqs)
         with amp.autocast("cuda", dtype=torch.float32):
             x = x + y * e[2].type_as(x)
 
         # cross-attention & ffn function
         def cross_attn_ffn(x, context, context_lens, e):
             x = x + self.cross_attn(self.norm3(x), context, context_lens)
-            y = self.ffn((self.norm2(x).float() * (1 + e[4]) + e[3]).type_as(x))
+            y = self.ffn(_modulate_norm(self.norm2, x, e[4], e[3], out_dtype=x.dtype))
             with amp.autocast("cuda", dtype=torch.float32):
                 x = x + y * e[5].type_as(x)
             return x
@@ -450,7 +458,7 @@ class Head(nn.Module):
         assert e.dtype == torch.float32
         with amp.autocast("cuda", dtype=torch.float32):
             e = (self.modulation + e.unsqueeze(1)).chunk(2, dim=1)
-            x = self.head(self.norm(x) * (1 + e[1]) + e[0])
+            x = self.head(_modulate_norm(self.norm, x, e[1], e[0]))
         return x
 
 
