@@ -1,0 +1,52 @@
+# H3 FL2VA: DMD (5 sigma points / 4 updates), native W8A8, no cache by default.
+# Full DMD + ready-to-use W8A8 + AdaLN: https://huggingface.co/TurboDiffusion/TurboH3-FL2VA-I2VA
+# Download the published W8A8 weights directly; no local export is required.
+# Replace checkpoint paths with CLI flags.
+model_root: checkpoints/MiniMax-H3/FL2VA
+text_encoder:
+  engine: tp
+  tp_size: 4
+  layer_idx: 50
+  max_length: 4096
+  text_dim: 5120
+  apply_chat_template: false
+dit:
+  model_path: checkpoints/TurboH3-FL2VA-I2VA/transformer
+  turbo_int8_path: checkpoints/TurboH3-FL2VA-I2VA/w8a8/model_w8a8.safetensors
+  adaln_bake_path: checkpoints/TurboH3-FL2VA-I2VA/adaln/adaln_i2va_s5_v12_a3.safetensors
+  ulysses_degree: 8
+  use_quant_comm: true
+  use_async_comm: true
+  attn_backend: sparge_attn
+  sparge_attn_topk: 0.5
+  sparge_attn_pre_sink_length: auto
+  sparge_attn_post_sink_length: 0
+  use_offload: true
+  offload_interlace: 0
+  bake_adaln: true
+  steps: 5
+  video_shift: 12.0
+  audio_shift: 3.0
+  dbcache:
+    enabled: false
+    probe_only: false
+    Fn_compute_blocks: 8
+    Bn_compute_blocks: 4
+    max_warmup_steps: 1
+    max_continuous_cached_steps: 1
+    residual_diff_threshold: 0.20
+    enable_taylorseer: false
+vae:
+  video_decoder_precision: w8a8
+  parallel_tiling: true
+  sp_size: 8
+  tile_size: 256
+  tile_overlap_min: 64
+sample:
+  task: i2va
+  short_edge: 768
+  resolution: 768p
+  aspect_ratio: '16:9'
+  duration_seconds: 5.0
+  seed: 0
+  prompt: ''

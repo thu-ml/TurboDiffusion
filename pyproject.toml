@@ -53,6 +53,20 @@ build-backend = "setuptools.build_meta"
 [project.scripts]
 turbodiffusion-serve = "turbodiffusion.serve.tui:main"
 
+[project.optional-dependencies]
+h3 = [
+  "torch==2.11.0",
+  "transformers>=4.57.0,<5",
+  "diffusers==0.38.0",
+  "safetensors>=0.4.0",
+  "accelerate>=1.0.0",
+  "tqdm>=4.66.0",
+  "einops>=0.8.0",
+]
+
+[tool.setuptools.package-data]
+"turbodiffusion.h3" = ["NOTICE"]
+
 [project.urls]
 Homepage = "https://github.com/thu-ml/TurboDiffusion"
 Repository = "https://github.com/thu-ml/TurboDiffusion"

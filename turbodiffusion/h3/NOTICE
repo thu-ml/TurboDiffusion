@@ -1,0 +1,14 @@
+H3 FL2VA inference integration for TurboDiffusion.
+
+The tensor-parallel Qwen3-VL encoder in textencoder/encoder.py is adapted from:
+  https://github.com/vllm-project/vllm-omni
+  commit c27623c29c62365424d4633e2d45f01d9eebf039
+  vllm_omni/diffusion/models/minimax_h3/encoder.py
+Copyright the vLLM-Omni contributors. Licensed under Apache-2.0.
+The source header documents the standalone process-group and offload changes.
+
+The video and audio VAE implementations are not redistributed here. They are
+loaded, with explicit user consent, from the official model download:
+  https://huggingface.co/MiniMaxAI/MiniMax-H3
+The Python modules carry their own license notices. Model weights are governed
+by the MiniMax H3 Community License Agreement, not this repository's code license.
