@@ -610,7 +610,7 @@ We're actively working on the following features and improvements:
 
 - [x] Organize and release training code
 - [x] Optimize infrastructure to support flattened context parallel
-- [ ] Acceleration for MiniMax-H3 
+- [x] Acceleration for MiniMax-H3 
 - [ ] vLLM-Omni integration
 - [ ] Support for autoregressive video generation models
 

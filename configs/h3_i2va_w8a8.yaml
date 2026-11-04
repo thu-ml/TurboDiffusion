@@ -4,6 +4,7 @@
 # Replace checkpoint paths with CLI flags.
 model_root: checkpoints/MiniMax-H3/FL2VA
 text_encoder:
+  # model_path defaults to <model_root>/text_encoder and follows --model-root.
   engine: tp
   tp_size: 4
   layer_idx: 50
