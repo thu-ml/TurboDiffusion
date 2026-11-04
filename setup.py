@@ -20,33 +20,10 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 ops_dir = Path(__file__).parent / "turbodiffusion" / "ops"
 cutlass_dir = ops_dir / "cutlass"
 
-nvcc_flags = [
-    "-O3",
-    "-std=c++17",
-    "-U__CUDA_NO_HALF_OPERATORS__",
-    "-U__CUDA_NO_HALF_CONVERSIONS__",
-    "-U__CUDA_NO_BFLOAT16_OPERATORS__",
-    "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
-    "-U__CUDA_NO_BFLOAT162_OPERATORS__",
-    "-U__CUDA_NO_BFLOAT162_CONVERSIONS__",
-    "--expt-relaxed-constexpr",
-    "--expt-extended-lambda",
-    "--use_fast_math",
-    "--ptxas-options=--verbose,--warn-on-local-memory-usage",
-    "-lineinfo",
-    "-DCUTLASS_DEBUG_TRACE_LEVEL=0",
-    "-DNDEBUG",
-    "-Xcompiler",
-    "-fPIC"
-]
+nvcc_flags = ["-gencode", "arch=compute_86,code=sm_86"]
 
 cc_flag = [
-    "-gencode", "arch=compute_120a,code=sm_120a", 
-    "-gencode", "arch=compute_100,code=sm_100",
-    "-gencode", "arch=compute_90,code=sm_90",
-    "-gencode", "arch=compute_89,code=sm_89",
-    "-gencode", "arch=compute_80,code=sm_80"
-]
+    ]
 
 ext_modules = [
     CUDAExtension(
@@ -60,7 +37,7 @@ ext_modules = [
         ],
         extra_compile_args={
             "cxx": ["-O3", "-std=c++17"],
-            "nvcc": nvcc_flags + ["-DEXECMODE=0"] + cc_flag + ["--threads", "4"],
+            "nvcc": nvcc_flags + ["-DEXECMODE=0"] + cc_flag + ["--threads", "1"],
         },
         include_dirs=[
             cutlass_dir / "include",

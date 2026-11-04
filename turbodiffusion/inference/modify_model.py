@@ -81,7 +81,7 @@ def replace_linear_norm(
     return model
 
 
-tensor_kwargs = {"device": "cuda", "dtype": torch.bfloat16}
+tensor_kwargs = {"device": "cuda", "dtype": torch.float16}
 
 def select_model(model_name: str) -> torch.nn.Module:
     if model_name == "Wan2.1-1.3B":
