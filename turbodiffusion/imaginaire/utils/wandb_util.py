@@ -89,7 +89,8 @@ def _read_wandb_id(config_job: JobConfig, config_checkpoint: CheckpointConfig) -
     wandb_id = None
     wandb_id_path = f"{config_job.path_local}/wandb_id.txt"
     if os.path.isfile(wandb_id_path):
-        wandb_id = open(wandb_id_path).read().strip()
+        with open(wandb_id_path) as f:
+            wandb_id = f.read().strip()
     return wandb_id
 
 
