@@ -9,11 +9,13 @@ from pathlib import Path, PurePosixPath
 
 from huggingface_hub import snapshot_download
 
-DMD_REPO = "liran12345/h3-turbo-diffusion"
-DMD_REVISION = "a6369c0b0ef1d6f49c7889cca3b94c678ae7e634"
+DMD_REPO = "TurboDiffusion/TurboH3-FL2VA-I2VA"
+DMD_REVISION = "60266aa6c44e2ff371bc6aa89af8437ed9494507"
 COMPONENT_REPO = "MiniMaxAI/MiniMax-H3"
 COMPONENT_REVISION = "42ed227ee7df40d41602854ae760620d6eb651fe"
-DMD_PATTERNS = ("transformer/*", "adaln/*", "README.md", "LICENSE", "NOTICE", "manifest.json")
+DMD_PATTERNS = (
+    "transformer/*", "w8a8/*", "adaln/*", "README.md", "LICENSE", "NOTICE", "manifest.json",
+)
 ADALN_PATTERNS = ("adaln/*.safetensors", "adaln/*.json", "manifest.json")
 COMPONENT_PATTERNS = tuple(
     f"FL2VA/{name}/*"
@@ -49,8 +51,13 @@ def verify_manifest(root: Path, patterns: tuple[str, ...]) -> int:
     return len(selected)
 
 
-def download(dit_dir: Path, *, components_dir: Path | None = None, adaln_only: bool = False) -> None:
+def download(
+    dit_dir: Path, *, components_dir: Path | None = None,
+    adaln_only: bool = False, skip_w8a8: bool = False,
+) -> None:
     patterns = ADALN_PATTERNS if adaln_only else DMD_PATTERNS
+    if skip_w8a8:
+        patterns = tuple(pattern for pattern in patterns if pattern != "w8a8/*")
     snapshot_download(
         repo_id=DMD_REPO, revision=DMD_REVISION,
         allow_patterns=list(patterns), local_dir=str(dit_dir),
@@ -70,8 +77,13 @@ def main():
     parser.add_argument("--dit-dir", type=Path, required=True)
     parser.add_argument("--components-dir", type=Path)
     parser.add_argument("--adaln-only", action="store_true")
+    parser.add_argument("--skip-w8a8", action="store_true",
+                        help="download BF16 weights without the published W8A8 export")
     args = parser.parse_args()
-    download(args.dit_dir, components_dir=args.components_dir, adaln_only=args.adaln_only)
+    download(
+        args.dit_dir, components_dir=args.components_dir,
+        adaln_only=args.adaln_only, skip_w8a8=args.skip_w8a8,
+    )
 
 
 if __name__ == "__main__":

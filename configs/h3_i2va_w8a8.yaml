@@ -1,6 +1,6 @@
 # H3 FL2VA: DMD (5 sigma points / 4 updates), native W8A8, no cache by default.
-# Full DMD + AdaLN: https://huggingface.co/liran12345/h3-turbo-diffusion
-# Export W8A8 locally; see docs/h3_i2va.md for download and checkpoint paths.
+# Full DMD + ready-to-use W8A8 + AdaLN: https://huggingface.co/TurboDiffusion/TurboH3-FL2VA-I2VA
+# Download the published W8A8 weights directly; no local export is required.
 # Replace checkpoint paths with CLI flags.
 model_root: checkpoints/MiniMax-H3/FL2VA
 text_encoder:
@@ -11,9 +11,9 @@ text_encoder:
   text_dim: 5120
   apply_chat_template: false
 dit:
-  model_path: checkpoints/h3-turbo-diffusion/transformer
-  turbo_int8_path: checkpoints/h3-turbo-diffusion/model_w8a8.safetensors
-  adaln_bake_path: checkpoints/h3-turbo-diffusion/adaln/adaln_i2va_s5_v12_a3.safetensors
+  model_path: checkpoints/TurboH3-FL2VA-I2VA/transformer
+  turbo_int8_path: checkpoints/TurboH3-FL2VA-I2VA/w8a8/model_w8a8.safetensors
+  adaln_bake_path: checkpoints/TurboH3-FL2VA-I2VA/adaln/adaln_i2va_s5_v12_a3.safetensors
   ulysses_degree: 8
   use_quant_comm: true
   use_async_comm: true

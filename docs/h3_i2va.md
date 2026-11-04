@@ -20,7 +20,7 @@ no cache speedup or quality-parity claim is made for the default profile.
 - `turbodiffusion/h3/stages.py`, `vae.py`: image encoding, sampling, tiled
   video/audio decoding and MP4 export. The video VAE uses the same native
   `Int8Linear` for 144 attention/FFN projections in its 36 ViT decoder blocks.
-- `turbodiffusion/inference/export_h3_w8a8.py`: full-model W8A8 export.
+- `turbodiffusion/inference/export_h3_w8a8.py`: optional full-model W8A8 export.
 - `turbodiffusion/inference/download_h3.py`: revision-pinned Python downloads
   and DMD manifest size/SHA256 verification.
 - `turbodiffusion/h3/nccl.py`: loaded-library verification and an eight-rank
@@ -158,10 +158,15 @@ not eliminate NCCL or affect the VAE's own communication implementation.
 
 ## Download
 
-The full BF16 four-update DMD checkpoint and matching AdaLN table are at
-[liran12345/h3-turbo-diffusion](https://huggingface.co/liran12345/h3-turbo-diffusion).
-Original small FP32 tensors are preserved. The transformer has 34 shards
-and is approximately 61.73 GiB.
+The organization-hosted release is at
+[TurboDiffusion/TurboH3-FL2VA-I2VA](https://huggingface.co/TurboDiffusion/TurboH3-FL2VA-I2VA).
+It includes the full BF16 four-update DMD checkpoint, a ready-to-use native
+W8A8 export and the matching AdaLN table. **No local INT8 export is required.**
+The W8A8 checkpoint is `w8a8/model_w8a8.safetensors` (approximately 20.36 GiB).
+The BF16 transformer has 34 shards and is approximately 61.73 GiB.
+Both preserve the original small FP32 tensors. Export provenance is recorded
+in `w8a8/model_w8a8.json`; the published format is
+`h3_fl2va_turbo_w8a8_128`, exported with TurboDiffusion commit `bfe1067`.
 
 The text encoder, processor/tokenizer and video/audio VAEs come from
 [MiniMaxAI/MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3).
@@ -170,7 +175,7 @@ weights, but not the original many-step transformer:
 
 ```bash
 python -m turbodiffusion.inference.download_h3 \
-  --dit-dir /models/h3-turbo-diffusion \
+  --dit-dir /models/TurboH3-FL2VA-I2VA \
   --components-dir /models/MiniMax-H3
 ```
 
@@ -178,11 +183,14 @@ The bundled downloader uses `snapshot_download(allow_patterns=[...])`,
 compatible with both Hugging Face Hub 0.36.x in the H3 environment and 2.x.
 Their CLI multi-pattern `--include` syntax is incompatible; do not upgrade the
 H3 environment's Hub package independently of Transformers.
-The DMD release is pinned to `a6369c0b0ef1d6f49c7889cca3b94c678ae7e634`;
+The download includes both BF16 and published W8A8 weights by default.
+Pass `--skip-w8a8` only when you want BF16 weights without the published
+INT8 export, for example to perform a custom local export.
+The DMD release is pinned to `60266aa6c44e2ff371bc6aa89af8437ed9494507`;
 official components are pinned to `42ed227ee7df40d41602854ae760620d6eb651fe`.
-Every selected DMD file is checked against the pinned manifest's size and
-SHA256 before the command succeeds. This verifies publisher-release
-consistency, not organization ownership or a cryptographic signature.
+Every selected DMD file, including the W8A8 weights and export metadata, is
+checked against the pinned manifest's size and SHA256 before the command
+succeeds. This verifies release consistency, not a cryptographic signature.
 
 The published AdaLN table was refreshed on 2026-11-03 using the original FP32
 timestep MLP. Its JSON and embedded metadata record
@@ -192,7 +200,7 @@ the older 2026-10-29 table, refresh only the two AdaLN files:
 
 ```bash
 python -m turbodiffusion.inference.download_h3 \
-  --dit-dir /models/h3-turbo-diffusion --adaln-only
+  --dit-dir /models/TurboH3-FL2VA-I2VA --adaln-only
 ```
 
 The refresh downloads the safetensors, JSON and manifest from one pinned
@@ -207,29 +215,31 @@ The VAEs use the public Python modules supplied with those weights.
 before enabling it. The code is loaded from the local model directory,
 not a private checkout. Third-party attribution is in `turbodiffusion/h3/NOTICE`.
 Model weights remain subject to the
-[MiniMax H3 Community License Agreement](https://huggingface.co/liran12345/h3-turbo-diffusion/blob/main/LICENSE),
+[MiniMax H3 Community License Agreement](https://huggingface.co/TurboDiffusion/TurboH3-FL2VA-I2VA/blob/60266aa6c44e2ff371bc6aa89af8437ed9494507/LICENSE),
 not this repository's code license.
 The license excludes the United States, European Union, United Kingdom and
 Republic of Korea from its applicable territory; review the full terms and
 obtain any required permissions before downloading or using the weights.
-The current checkpoint is hosted by its publisher's personal account;
-an organization-hosted release is not yet available. This PR does not
-transfer weight ownership or broaden redistribution rights.
+The release is hosted by the TurboDiffusion organization; this does not
+broaden the upstream model license or redistribution rights.
 
-## Export W8A8
+## Optional Local Export
 
-Run from the TurboDiffusion checkout after building its CUDA extension:
+Skip this section for normal inference: the download already includes
+`w8a8/model_w8a8.safetensors` and the matching AdaLN table.
+To regenerate W8A8 for a custom checkpoint or a changed kernel/file format,
+run from the TurboDiffusion checkout after building its CUDA extension:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python -m turbodiffusion.inference.export_h3_w8a8 \
-  --model-path /models/h3-turbo-diffusion/transformer \
-  --output /models/h3-turbo-diffusion/model_w8a8.safetensors
+  --model-path /models/TurboH3-FL2VA-I2VA/transformer \
+  --output /models/TurboH3-FL2VA-I2VA/w8a8/model_w8a8.safetensors
 ```
 
 The exporter wraps only main-block QKV, attention output and MLP projections.
 It does not modify the source checkpoint or the CUDA kernels.
 To regenerate the table instead of reusing the published one, append
-`--adaln-output /models/h3-turbo-diffusion/adaln/adaln_i2va_s5_v12_a3.safetensors`.
+`--adaln-output /models/TurboH3-FL2VA-I2VA/adaln/adaln_i2va_s5_v12_a3.safetensors`.
 This regenerates the table for
 `i2va / steps=5 / video_shift=12 / audio_shift=3`, preserving the source FP32
 timestep MLP and writing its companion `.json`. Omit it to reuse an existing
@@ -256,9 +266,9 @@ modified. VAE quantization does not require re-baking DiT AdaLN either.
 ```bash
 bash scripts/inference_h3_i2va.sh \
   --model-root /models/MiniMax-H3/FL2VA \
-  --dit-model-path /models/h3-turbo-diffusion/transformer \
-  --w8a8-path /models/h3-turbo-diffusion/model_w8a8.safetensors \
-  --adaln-path /models/h3-turbo-diffusion/adaln/adaln_i2va_s5_v12_a3.safetensors \
+  --dit-model-path /models/TurboH3-FL2VA-I2VA/transformer \
+  --w8a8-path /models/TurboH3-FL2VA-I2VA/w8a8/model_w8a8.safetensors \
+  --adaln-path /models/TurboH3-FL2VA-I2VA/adaln/adaln_i2va_s5_v12_a3.safetensors \
   --trust-model-code \
   --image /path/to/first-frame.png \
   --prompt 'Video description and soundscape...' \
@@ -308,7 +318,7 @@ python -m torch.distributed.run --standalone --nproc_per_node=8 \
   tests/h3_sequence_parallel_check.py
 ```
 
-All 52 H3 tests passed with real native W8A8/public SpargeAttn CUDA coverage.
+All 55 H3 tests passed with real native W8A8/public SpargeAttn CUDA coverage.
 The isolated PyTorch 2.11 validation uses the official wheel NCCL and rebuilt
 native W8A8/public SpargeAttn extensions. Tests cover local dense refinement of
 long prompts, FP32 preservation and legacy-checkpoint rejection, padding
@@ -321,6 +331,14 @@ AdaLN metadata mismatch rejection, download checksums, EXIF orientation,
 partial suffix sink blocks and text encoder paths after config relocation.
 The public SpargeAttn CUDA comparison also covers 193/257-token sequences
 with nonzero suffix sinks.
+Download tests also cover selecting and checking the published W8A8 weights
+by default and the optional `--skip-w8a8` path.
+On 2026-11-04, the organization release's INT8 header matched all 637 runtime
+tensor names, shapes and dtypes, and its matching AdaLN table loaded.
+Hub 0.36.2 and 2.4.0 both downloaded and verified selected release metadata
+and AdaLN files; the 0.36.2 check used HTTP with `HF_HUB_DISABLE_XET=1`.
+The complete published INT8 tensor payload was not re-downloaded or sampled
+in this check.
 Fresh four-rank encoding followed by default eight-rank sampling and
 decoding also passed; the optional cache profile passed sample/decode using
 that same freshly encoded conditioning. Both exported 124-frame audio/video
